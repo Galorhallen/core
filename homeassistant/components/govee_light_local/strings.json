@@ -1,6 +1,13 @@
 {
   "config": {
     "step": {
+      "user": {
+        "description": "This is the description",
+        "data": {
+          "discovery_enabled": "Enable Discovery",
+          "manual_devices_ip": "Manual devices"
+        }
+      },
       "confirm": {
         "description": "[%key:common::config_flow::description::confirm_setup%]"
       }
