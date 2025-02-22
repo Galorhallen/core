@@ -3,19 +3,37 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable
 from contextlib import suppress
 import logging
+from typing import Any
 
-from govee_local_api import GoveeController
+from govee_local_api import GoveeController, GoveeDevice
+import voluptuous as vol
 
 from homeassistant.components import network
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers import config_entry_flow
+from homeassistant.config_entries import (
+    ConfigEntry,
+    FlowResult,
+    OptionsFlow,
+    ConfigFlowResult,
+)
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.config_entry_flow import DiscoveryFlowHandler
+from homeassistant.helpers import config_validation as cv, selector
 
 from .const import (
     CONF_LISTENING_PORT_DEFAULT,
     CONF_MULTICAST_ADDRESS_DEFAULT,
     CONF_TARGET_PORT_DEFAULT,
+    CONF_OPTION_CURRENT_GROUP,
+    CONF_OPTION_DEVICE,
+    CONF_OPTION_GROUP_COUNT,
+    CONF_OPTION_GROUPS,
+    CONF_OPTION_AVAILABLE_SEGMENTS,
+    CONF_OPTION_SEGMENTS,
+    CONF_OPTION_SEGMENTS_COUNT,
+    CONF_OPTION_IMPORT_STRIP,
     DISCOVERY_TIMEOUT,
     DOMAIN,
 )
@@ -61,6 +79,127 @@ async def _async_has_devices(hass: HomeAssistant) -> bool:
     return devices_count > 0
 
 
-config_entry_flow.register_discovery_flow(
-    DOMAIN, "Govee light local", _async_has_devices
-)
+class GoveeDiscoveryFlowHandler(DiscoveryFlowHandler[Awaitable[bool]], domain=DOMAIN):
+    """Govee discovery flow that callsback."""
+
+    def __init__(self) -> None:
+        """Init discovery flow."""
+        super().__init__(DOMAIN, "Govee light local", _async_has_devices)
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        config_entry: ConfigEntry,
+    ) -> OptionsFlowHandler:
+        """Create the options flow."""
+        return OptionsFlowHandler(config_entry)
+
+
+class OptionsFlowHandler(OptionsFlow):
+    """Handle a option flow for Govee light local."""
+
+    def __init__(self, config_entry: ConfigEntry) -> None:
+        """Initialize the options flow."""
+        super().__init__()
+
+        self._config_entry = config_entry
+        self._options = {}
+        self._device: GoveeDevice | None = None
+
+    async def async_step_groups(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        if user_input is None:
+            schema = vol.Schema(
+                {
+                    vol.Required(
+                        CONF_OPTION_IMPORT_STRIP, default=True
+                    ): selector.BooleanSelector(),
+                    vol.Required(CONF_OPTION_GROUP_COUNT, default=1): vol.All(
+                        vol.Coerce(int),
+                        vol.Range(min=1, max=self._options[CONF_OPTION_SEGMENTS_COUNT]),
+                    ),
+                }
+            )
+            return self.async_show_form(
+                step_id="groups",
+                data_schema=self.add_suggested_values_to_schema(schema, self._options),
+                description_placeholders={"device": f"{self._device.sku}"},
+            )
+
+        self._options[CONF_OPTION_IMPORT_STRIP] = user_input[CONF_OPTION_IMPORT_STRIP]
+        self._options[CONF_OPTION_GROUP_COUNT] = user_input[CONF_OPTION_GROUP_COUNT]
+        self._options[CONF_OPTION_AVAILABLE_SEGMENTS] = set(
+            range(1, self._options[CONF_OPTION_SEGMENTS_COUNT] + 1)
+        )
+        self._options[CONF_OPTION_GROUPS] = [
+            {} for i in range(self._options[CONF_OPTION_GROUP_COUNT])
+        ]
+        self._options[CONF_OPTION_CURRENT_GROUP] = 0
+
+        return await self.async_step_segments()
+
+    async def async_step_segments(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        if user_input is not None:
+            segments: set[int] = set(user_input[CONF_OPTION_SEGMENTS])
+            self._options[CONF_OPTION_AVAILABLE_SEGMENTS] -= segments
+            current_group = self._options[CONF_OPTION_CURRENT_GROUP]
+            self._options[CONF_OPTION_GROUPS][current_group] = segments
+            self._options[CONF_OPTION_CURRENT_GROUP] += 1
+
+            if (
+                self._options[CONF_OPTION_CURRENT_GROUP]
+                == self._options[CONF_OPTION_GROUP_COUNT]
+            ):
+                return self.async_create_entry(data=self._options)
+
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_OPTION_SEGMENTS): cv.multi_select(
+                    self._options[CONF_OPTION_AVAILABLE_SEGMENTS]
+                ),
+            }
+        )
+
+        current_group = self._options[CONF_OPTION_CURRENT_GROUP]
+        return self.async_show_form(
+            step_id="segments",
+            data_schema=schema,
+            description_placeholders={"group": f"Group {current_group}"},
+        )
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Manage the options."""
+        coordinator = self._config_entry.runtime_data
+        devices = {
+            d.fingerprint: f"{d.sku} ({d.capabilities.segments_count} segments)"
+            for d in coordinator.devices
+            if d.capabilities.segments_count > 1
+        }
+
+        if user_input is not None:
+            if user_input["Import mode"] == "Group":
+                self._options["import_mode"] = "group"
+                self._options[CONF_OPTION_DEVICE] = user_input[CONF_OPTION_DEVICE]
+                self._device = coordinator.get_device_by_fingerprint(
+                    user_input[CONF_OPTION_DEVICE]
+                )
+                self._options[CONF_OPTION_SEGMENTS_COUNT] = (
+                    self._device.capabilities.segments_count
+                )
+
+                return await self.async_step_groups()
+            return self.async_create_entry(data=user_input)
+
+        schema = vol.Schema(
+            {
+                vol.Optional("device"): vol.In(devices),
+                vol.Required("Import mode", default="Group"): vol.In(["Group", "All"]),
+            }
+        )
+        return self.async_show_form(step_id="init", data_schema=schema)

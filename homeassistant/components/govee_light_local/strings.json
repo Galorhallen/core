@@ -10,6 +10,29 @@
       "no_devices_found": "[%key:common::config_flow::abort::no_devices_found%]"
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Device and import mode",
+        "data:": {
+          "device": "[%key:common::config_flow::data::device%]",
+          "import_mode": "Import mode"
+        }
+      },
+      "groups": {
+        "title": "Group count",
+        "description": "How many segments group for device {device}?",
+        "data": {
+          "group_count": "How many segments group?",
+          "import_strip": "Import strip"
+        }
+      },
+      "segments": {
+        "title": "Segments selection",
+        "description": "Select segments for group {group}"
+      }
+    }
+  },
   "entity": {
     "light": {
       "govee_light": {

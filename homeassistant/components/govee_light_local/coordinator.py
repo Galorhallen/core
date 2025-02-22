@@ -98,6 +98,13 @@ class GoveeLocalApiCoordinator(DataUpdateCoordinator[list[GoveeDevice]]):
         """Return a list of discovered Govee devices."""
         return self._controller.devices
 
+    def get_device_by_fingerprint(self, fingerprint: str) -> GoveeDevice | None:
+        """Return a device by fingerprint."""
+        for device in self.devices:
+            if device.fingerprint == fingerprint:
+                return device
+        return None
+
     async def _async_update_data(self) -> list[GoveeDevice]:
         self._controller.send_update_message()
         return self._controller.devices
