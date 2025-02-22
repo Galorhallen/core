@@ -12,28 +12,23 @@ from govee_local_api import GoveeController, GoveeDevice
 import voluptuous as vol
 
 from homeassistant.components import network
-from homeassistant.config_entries import (
-    ConfigEntry,
-    FlowResult,
-    OptionsFlow,
-    ConfigFlowResult,
-)
+from homeassistant.config_entries import ConfigEntry, ConfigFlowResult, OptionsFlow
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.config_entry_flow import DiscoveryFlowHandler
 from homeassistant.helpers import config_validation as cv, selector
+from homeassistant.helpers.config_entry_flow import DiscoveryFlowHandler
 
 from .const import (
     CONF_LISTENING_PORT_DEFAULT,
     CONF_MULTICAST_ADDRESS_DEFAULT,
-    CONF_TARGET_PORT_DEFAULT,
+    CONF_OPTION_AVAILABLE_SEGMENTS,
     CONF_OPTION_CURRENT_GROUP,
     CONF_OPTION_DEVICE,
     CONF_OPTION_GROUP_COUNT,
     CONF_OPTION_GROUPS,
-    CONF_OPTION_AVAILABLE_SEGMENTS,
+    CONF_OPTION_IMPORT_STRIP,
     CONF_OPTION_SEGMENTS,
     CONF_OPTION_SEGMENTS_COUNT,
-    CONF_OPTION_IMPORT_STRIP,
+    CONF_TARGET_PORT_DEFAULT,
     DISCOVERY_TIMEOUT,
     DOMAIN,
 )
