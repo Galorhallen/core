@@ -24,3 +24,4 @@ CONF_OPTION_AVAILABLE_SEGMENTS = "available_segments"
 CONF_OPTION_SEGMENTS_COUNT = "segments_count"
 
 CONF_OPTION_IMPORT_STRIP = "import_strip"
+CONF_OPTION_IMPORT_MODE = "import_mode"

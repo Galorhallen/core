@@ -16,7 +16,10 @@
         "title": "Device and import mode",
         "data:": {
           "device": "[%key:common::config_flow::data::device%]",
-          "import_mode": "Import mode"
+          "import_mode": "Import mode",
+          "all_segments": "All segments",
+          "segments_group": "Segments group",
+          "no_segments": "No segments"
         }
       },
       "groups": {

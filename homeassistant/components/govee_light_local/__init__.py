@@ -31,6 +31,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: GoveeLocalConfigEntry) -
             await asyncio.wait_for(cleanup_complete.wait(), 1)
 
     entry.async_on_unload(await_cleanup)
+    entry.async_on_unload(entry.add_update_listener(update_listener))
 
     try:
         await coordinator.start()
@@ -53,6 +54,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: GoveeLocalConfigEntry) -
     entry.runtime_data = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
+
+
+async def update_listener(hass: HomeAssistant, entry: GoveeLocalConfigEntry) -> None:
+    """Handle options update."""
+    print(entry.options)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: GoveeLocalConfigEntry) -> bool:

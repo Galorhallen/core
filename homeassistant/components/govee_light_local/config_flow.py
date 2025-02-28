@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Awaitable
 from contextlib import suppress
 import logging
-from typing import Any
+from typing import Any, Final
 
 from govee_local_api import GoveeController, GoveeDevice
 import voluptuous as vol
@@ -18,6 +18,7 @@ from homeassistant.helpers import config_validation as cv, selector
 from homeassistant.helpers.config_entry_flow import DiscoveryFlowHandler
 
 from .const import (
+    CONF_OPTION_IMPORT_MODE,
     CONF_LISTENING_PORT_DEFAULT,
     CONF_MULTICAST_ADDRESS_DEFAULT,
     CONF_OPTION_AVAILABLE_SEGMENTS,
@@ -34,6 +35,8 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+IMPORT_MODE: Final[set[str]] = {"all_segments", "segments_group", "no_segments"}
 
 
 async def _async_has_devices(hass: HomeAssistant) -> bool:
@@ -160,10 +163,15 @@ class OptionsFlowHandler(OptionsFlow):
         )
 
         current_group = self._options[CONF_OPTION_CURRENT_GROUP]
+        is_last: bool = (
+            self._options[CONF_OPTION_CURRENT_GROUP]
+            == self._options[CONF_OPTION_GROUP_COUNT] - 1
+        )
         return self.async_show_form(
             step_id="segments",
             data_schema=schema,
             description_placeholders={"group": f"Group {current_group}"},
+            last_step=is_last,
         )
 
     async def async_step_init(
@@ -178,23 +186,24 @@ class OptionsFlowHandler(OptionsFlow):
         }
 
         if user_input is not None:
-            if user_input["Import mode"] == "Group":
-                self._options["import_mode"] = "group"
-                self._options[CONF_OPTION_DEVICE] = user_input[CONF_OPTION_DEVICE]
-                self._device = coordinator.get_device_by_fingerprint(
-                    user_input[CONF_OPTION_DEVICE]
-                )
-                self._options[CONF_OPTION_SEGMENTS_COUNT] = (
-                    self._device.capabilities.segments_count
-                )
-
+            self._options[CONF_OPTION_IMPORT_MODE] = user_input[CONF_OPTION_IMPORT_MODE]
+            self._options[CONF_OPTION_DEVICE] = user_input[CONF_OPTION_DEVICE]
+            self._device = coordinator.get_device_by_fingerprint(
+                user_input[CONF_OPTION_DEVICE]
+            )
+            self._options[CONF_OPTION_SEGMENTS_COUNT] = (
+                self._device.capabilities.segments_count
+            )
+            if user_input[CONF_OPTION_IMPORT_MODE] == "segments_group":
                 return await self.async_step_groups()
-            return self.async_create_entry(data=user_input)
+            return self.async_create_entry(title="", data=self._options)
 
         schema = vol.Schema(
             {
                 vol.Optional("device"): vol.In(devices),
-                vol.Required("Import mode", default="Group"): vol.In(["Group", "All"]),
+                vol.Required(CONF_OPTION_IMPORT_MODE, default="segments_group"): vol.In(
+                    IMPORT_MODE
+                ),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)
