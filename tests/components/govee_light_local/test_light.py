@@ -631,6 +631,37 @@ async def test_scene_restore_temperature(
     assert light.attributes["color_temp_kelvin"] == initial_color
 
 
+async def test_update_callback_lifecycle(
+    hass: HomeAssistant, mock_govee_api: MagicMock
+) -> None:
+    """Test update callback is registered on add and cleared on remove."""
+
+    device = GoveeDevice(
+        controller=mock_govee_api,
+        ip="192.168.1.100",
+        fingerprint="asdawdqwdqwd",
+        sku="H615A",
+        capabilities=DEFAULT_CAPABILITIES,
+    )
+    mock_govee_api.devices = [device]
+
+    entry = MockConfigEntry(domain=DOMAIN)
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Callback should be registered after entity is added
+    assert device._update_callback is not None
+
+    # Remove the config entry
+    assert await hass.config_entries.async_remove(entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Callback should be cleared after entity is removed
+    assert device._update_callback is None
+
+
 async def test_scene_none(hass: HomeAssistant, mock_govee_api: MagicMock) -> None:
     """Test turn on 'none' scene."""
 
