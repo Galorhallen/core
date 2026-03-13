@@ -17,12 +17,15 @@ from homeassistant.components.light import (
     LightEntityFeature,
     filter_supported_color_modes,
 )
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, MANUFACTURER
+from .const import DOMAIN, MANUFACTURER, SIGNAL_GOVEE_DEVICE_REMOVE
 from .coordinator import GoveeLocalApiCoordinator, GoveeLocalConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
@@ -39,16 +42,13 @@ async def async_setup_entry(
 
     coordinator = config_entry.runtime_data
 
-    def discovery_callback(device: GoveeDevice, is_new: bool) -> bool:
-        if is_new:
-            async_add_entities([GoveeLight(coordinator, device)])
-        return True
-
     async_add_entities(
         GoveeLight(coordinator, device) for device in coordinator.devices
     )
 
-    await coordinator.set_discovery_callback(discovery_callback)
+    coordinator.new_device_callbacks.append(
+        lambda device: async_add_entities([GoveeLight(coordinator, device)])
+    )
 
 
 class GoveeLight(CoordinatorEntity[GoveeLocalApiCoordinator], LightEntity):
@@ -80,7 +80,6 @@ class GoveeLight(CoordinatorEntity[GoveeLocalApiCoordinator], LightEntity):
 
         super().__init__(coordinator)
         self._device = device
-        device.set_update_callback(self._update_callback)
 
         self._attr_unique_id = device.fingerprint
 
@@ -118,6 +117,43 @@ class GoveeLight(CoordinatorEntity[GoveeLocalApiCoordinator], LightEntity):
             model_id=device.sku,
             serial_number=device.fingerprint,
         )
+
+    async def async_added_to_hass(self) -> None:
+        """Register update callback when entity is added."""
+        await super().async_added_to_hass()
+        self._device.set_update_callback(self._update_callback)
+
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                SIGNAL_GOVEE_DEVICE_REMOVE,
+                self.async_signal_govee_device_removed,
+            )
+        )
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Unregister update callback when entity is removed."""
+        self._device.set_update_callback(None)
+        await super().async_will_remove_from_hass()
+
+    async def async_signal_govee_device_removed(self, fingerprint: str) -> None:
+        """Handle device removal."""
+        if self._device.fingerprint == fingerprint:
+            ent_registry = er.async_get(self.hass)
+            if entity_id := ent_registry.async_get_entity_id(
+                Platform.LIGHT, DOMAIN, self._device.fingerprint
+            ):
+                ent_registry.async_remove(entity_id)
+
+            if dev_registry := dr.async_get(self.hass):
+                device_identifiers = {(DOMAIN, self._device.fingerprint)}
+                if device := dev_registry.async_get_device(device_identifiers):
+                    dev_registry.async_update_device(
+                        device.id,
+                        remove_config_entry_id=self.coordinator.config_entry.entry_id,
+                    )
+            self.coordinator.remove_device(self._device)
+            await self.async_remove(force_remove=True)
 
     @property
     def is_on(self) -> bool:
@@ -196,7 +232,8 @@ class GoveeLight(CoordinatorEntity[GoveeLocalApiCoordinator], LightEntity):
 
     @callback
     def _update_callback(self, device: GoveeDevice) -> None:
-        self.async_write_ha_state()
+        if self.hass:
+            self.async_write_ha_state()
 
     def _save_last_color_state(self) -> None:
         color_mode = self.color_mode

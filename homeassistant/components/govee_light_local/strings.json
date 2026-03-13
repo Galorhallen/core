@@ -1,12 +1,25 @@
 {
   "config": {
     "abort": {
+      "already_in_progress": "[%key:common::config_flow::abort::already_in_progress%]",
       "no_devices_found": "[%key:common::config_flow::abort::no_devices_found%]",
       "single_instance_allowed": "[%key:common::config_flow::abort::single_instance_allowed%]"
     },
     "step": {
-      "confirm": {
+      "discovery_confirm": {
         "description": "[%key:common::config_flow::description::confirm_setup%]"
+      },
+      "select_interfaces": {
+        "data": {
+          "listening_interfaces": "Listening interfaces"
+        },
+        "description": "Select the network interfaces to use for device communication. Leave empty to use all interfaces."
+      },
+      "user": {
+        "data": {
+          "auto_discovery": "Auto-discovery enabled"
+        },
+        "description": "Please make a choice"
       }
     }
   },
@@ -32,6 +45,14 @@
           }
         }
       }
+    },
+    "sensor": {
+      "ip_address": {
+        "name": "IP address"
+      },
+      "listening_interface": {
+        "name": "Listening interface"
+      }
     }
   },
   "exceptions": {
@@ -40,6 +61,47 @@
     },
     "port_in_use": {
       "message": "Port {port} is already in use"
+    }
+  },
+  "options": {
+    "abort": {
+      "invalid_ip": "Invalid IP address: {ip}",
+      "no_devices": "No manually added devices were found"
+    },
+    "step": {
+      "add_device": {
+        "data": {
+          "device_ip": "[%key:common::config_flow::data::ip%]"
+        },
+        "description": "Enter the device's IP address"
+      },
+      "configure_auto_discovery": {
+        "data": {
+          "auto_discovery": "[%key:component::govee_light_local::config::step::user::data::auto_discovery%]"
+        },
+        "description": "Enable or disable automatic discovery"
+      },
+      "configure_interfaces": {
+        "data": {
+          "listening_interfaces": "[%key:component::govee_light_local::config::step::select_interfaces::data::listening_interfaces%]"
+        },
+        "description": "Select the network interfaces to use for device communication. Leave empty to use all interfaces."
+      },
+      "init": {
+        "description": "Please make a choice",
+        "menu_options": {
+          "add_device": "[%key:component::govee_light_local::options::step::add_device::description%]",
+          "configure_auto_discovery": "[%key:component::govee_light_local::options::step::configure_auto_discovery::description%]",
+          "configure_interfaces": "Configure listening interfaces",
+          "remove_device": "Remove a manually added device"
+        }
+      },
+      "remove_device": {
+        "data": {
+          "ips_to_remove": "IPs to remove"
+        },
+        "description": "Select one or more IP addresses to remove"
+      }
     }
   }
 }
