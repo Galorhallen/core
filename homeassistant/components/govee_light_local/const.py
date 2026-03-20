@@ -16,6 +16,7 @@ DISCOVERY_TIMEOUT = 5
 
 CONF_AUTO_DISCOVERY = "auto_discovery"
 CONF_MANUAL_DEVICES = "manual_devices"
+CONF_DEVICE_INTERFACE = "device_interface"
 CONF_DEVICE_IP = "device_ip"
 CONF_IPS_TO_REMOVE = "ips_to_remove"
 CONF_LISTENING_INTERFACES = "listening_interfaces"

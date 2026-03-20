@@ -8,12 +8,14 @@ from homeassistant import config_entries
 from homeassistant.components.govee_light_local.const import (
     CONF_AUTO_DISCOVERY,
     CONF_IPS_TO_REMOVE,
+    CONF_LISTENING_INTERFACES,
     CONF_MANUAL_DEVICES,
     CONF_OPTION_MODE,
     DOMAIN,
     SIGNAL_GOVEE_DEVICE_REMOVE,
     OptionMode,
 )
+from homeassistant.components.govee_light_local.coordinator import GoveeController
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
@@ -31,7 +33,7 @@ async def test_setup_entry_with_options(
     config_entry = MockConfigEntry(
         domain=DOMAIN,
         data={CONF_AUTO_DISCOVERY: False},
-        options={CONF_MANUAL_DEVICES: ["192.168.1.100"]},
+        options={CONF_MANUAL_DEVICES: {"192.168.1.100": None}},
     )
 
     config_entry.add_to_hass(hass)
@@ -268,3 +270,77 @@ async def test_update_options_add_devices(
     await hass.async_block_till_done()
 
     mock_govee_api.add_device_to_discovery_queue.assert_called_once_with(device1.ip)
+
+
+async def test_per_device_interface_included_in_source_ips(
+    hass: HomeAssistant, mock_govee_api: AsyncMock
+) -> None:
+    """Test per-device interface IP is included in source_ips even when not in global listening_interfaces."""
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_AUTO_DISCOVERY: False},
+        options={
+            CONF_LISTENING_INTERFACES: ["192.168.1.1"],
+            CONF_MANUAL_DEVICES: {"192.168.1.100": "10.0.0.1"},
+        },
+    )
+
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    call_kwargs = GoveeController.call_args
+    listening_addresses = call_kwargs[1]["listening_addresses"]
+    assert "10.0.0.1" in listening_addresses
+    assert "192.168.1.1" in listening_addresses
+
+
+async def test_add_device_with_explicit_interface_triggers_reload(
+    hass: HomeAssistant, mock_govee_api: AsyncMock
+) -> None:
+    """Test adding device with explicit interface triggers reload."""
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_AUTO_DISCOVERY: False},
+        options={},
+    )
+
+    config_entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert config_entry.state is config_entries.ConfigEntryState.LOADED
+
+    hass.config_entries.async_update_entry(
+        config_entry,
+        options={
+            CONF_OPTION_MODE: OptionMode.ADD_DEVICE,
+            CONF_MANUAL_DEVICES: {"192.168.1.200": "10.0.0.1"},
+        },
+    )
+    await hass.async_block_till_done()
+
+    # After reload, entry should still be loaded
+    assert config_entry.state is config_entries.ConfigEntryState.LOADED
+
+
+async def test_setup_entry_with_old_list_format(
+    hass: HomeAssistant, mock_govee_api: AsyncMock
+) -> None:
+    """Test backward compat: old list format for manual_devices still works."""
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_AUTO_DISCOVERY: False},
+        options={CONF_MANUAL_DEVICES: ["192.168.1.100"]},
+    )
+
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    mock_govee_api.add_device_to_discovery_queue.assert_called_once_with(
+        "192.168.1.100"
+    )

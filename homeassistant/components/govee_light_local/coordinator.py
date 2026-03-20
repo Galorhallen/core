@@ -36,10 +36,15 @@ class GoveeLocalApiConfig:
     """Govee light local configuration."""
 
     auto_discovery: bool
-    manual_devices: set[str]
+    manual_devices: dict[str, str | None]
     ips_to_remove: set[str]
     option_mode: OptionMode | None
     listening_interfaces: list[str]
+
+    @property
+    def manual_device_interfaces(self) -> set[str]:
+        """Return the set of explicitly configured per-device interface IPs."""
+        return {ip for ip in self.manual_devices.values() if ip is not None}
 
     @classmethod
     def from_config_entry(cls, config_entry: GoveeLocalConfigEntry) -> Self:
@@ -50,9 +55,15 @@ class GoveeLocalApiConfig:
 
         option_mode: str | None = options.get(CONF_OPTION_MODE, None)
 
+        raw_devices = options.get(CONF_MANUAL_DEVICES, {})
+        if isinstance(raw_devices, (list, set)):
+            manual_devices = dict.fromkeys(raw_devices)
+        else:
+            manual_devices = dict(raw_devices)
+
         return cls(
             options.get(CONF_AUTO_DISCOVERY, config.get(CONF_AUTO_DISCOVERY, True)),
-            set(options.get(CONF_MANUAL_DEVICES, [])),
+            manual_devices,
             set(options.get(CONF_IPS_TO_REMOVE, [])),
             OptionMode(option_mode) if option_mode else None,
             list(

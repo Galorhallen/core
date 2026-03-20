@@ -71,7 +71,11 @@
     "step": {
       "add_device": {
         "data": {
+          "device_interface": "Network interface",
           "device_ip": "[%key:common::config_flow::data::ip%]"
+        },
+        "data_description": {
+          "device_interface": "Select the network interface to use for communicating with this device. Auto will use all configured interfaces."
         },
         "description": "Enter the device's IP address"
       },

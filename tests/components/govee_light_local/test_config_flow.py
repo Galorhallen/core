@@ -8,6 +8,7 @@ from govee_local_api import GoveeDevice
 from homeassistant import config_entries
 from homeassistant.components.govee_light_local.const import (
     CONF_AUTO_DISCOVERY,
+    CONF_DEVICE_INTERFACE,
     CONF_DEVICE_IP,
     CONF_IPS_TO_REMOVE,
     CONF_LISTENING_INTERFACES,
@@ -267,7 +268,7 @@ async def test_options_flow_auto_discovery(hass: HomeAssistant) -> None:
     assert result["data"] == {
         CONF_OPTION_MODE: OptionMode.CONFIGURE_AUTO_DISCOVERY,
         CONF_AUTO_DISCOVERY: False,
-        CONF_MANUAL_DEVICES: set(),
+        CONF_MANUAL_DEVICES: {},
         CONF_IPS_TO_REMOVE: set(),
     }
 
@@ -296,7 +297,7 @@ async def test_options_flow_add_device(hass: HomeAssistant) -> None:
 
     expected_options = {
         CONF_OPTION_MODE: OptionMode.ADD_DEVICE,
-        CONF_MANUAL_DEVICES: {"192.168.1.100"},
+        CONF_MANUAL_DEVICES: {"192.168.1.100": None},
         CONF_IPS_TO_REMOVE: set(),
         CONF_AUTO_DISCOVERY: False,
     }
@@ -366,7 +367,7 @@ async def test_options_flow_remove_device_with_devices(
     expected_options = {
         CONF_OPTION_MODE: OptionMode.REMOVE_DEVICE,
         CONF_AUTO_DISCOVERY: False,
-        CONF_MANUAL_DEVICES: {"192.168.1.100", "192.168.1.101"},
+        CONF_MANUAL_DEVICES: {"192.168.1.100": None, "192.168.1.101": None},
         CONF_IPS_TO_REMOVE: ["192.168.1.100"],
     }
 
@@ -439,7 +440,7 @@ async def test_options_flow_add_device_preserves_existing_devices(
         CONF_OPTION_MODE: OptionMode.ADD_DEVICE,
         CONF_AUTO_DISCOVERY: False,
         CONF_IPS_TO_REMOVE: set(),
-        CONF_MANUAL_DEVICES: {"192.168.1.101", "192.168.1.102"},
+        CONF_MANUAL_DEVICES: {"192.168.1.101": None, "192.168.1.102": None},
     }
     assert result["type"] == "create_entry"
     assert result["data"] == expected_options
@@ -658,6 +659,109 @@ async def test_options_flow_init_menu_non_advanced(hass: HomeAssistant) -> None:
 
     assert result["type"] == "menu"
     assert "configure_interfaces" not in result["menu_options"]
+
+
+async def test_options_flow_add_device_multi_nic_shows_interface_selector(
+    hass: HomeAssistant,
+) -> None:
+    """Test multi-NIC shows interface selector with Auto + adapters."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_AUTO_DISCOVERY: False},
+    )
+    config_entry.add_to_hass(hass)
+
+    with patch(
+        "homeassistant.components.govee_light_local.config_flow.network.async_get_adapters",
+        return_value=MOCK_ADAPTERS,
+    ):
+        result = await hass.config_entries.options.async_init(config_entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            user_input={"next_step_id": "add_device"},
+        )
+
+        assert result["type"] == "form"
+        assert result["step_id"] == "add_device"
+        schema = result["data_schema"].schema
+        assert CONF_DEVICE_INTERFACE in {k.schema for k in schema}
+
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            user_input={CONF_DEVICE_IP: "192.168.1.200", CONF_DEVICE_INTERFACE: ""},
+        )
+
+        assert result["type"] == "create_entry"
+        assert result["data"][CONF_MANUAL_DEVICES] == {"192.168.1.200": None}
+
+
+async def test_options_flow_add_device_single_nic_hides_interface_selector(
+    hass: HomeAssistant,
+) -> None:
+    """Test single-NIC hides interface selector."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_AUTO_DISCOVERY: False},
+    )
+    config_entry.add_to_hass(hass)
+
+    single_adapter = [
+        {
+            "name": "eth0",
+            "index": 1,
+            "enabled": True,
+            "auto": True,
+            "default": True,
+            "ipv6": [],
+            "ipv4": [{"address": "192.168.1.1", "network_prefix": 24}],
+        },
+    ]
+
+    with patch(
+        "homeassistant.components.govee_light_local.config_flow.network.async_get_adapters",
+        return_value=single_adapter,
+    ):
+        result = await hass.config_entries.options.async_init(config_entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            user_input={"next_step_id": "add_device"},
+        )
+
+        assert result["type"] == "form"
+        schema = result["data_schema"].schema
+        assert CONF_DEVICE_INTERFACE not in {k.schema for k in schema}
+
+
+async def test_options_flow_add_device_with_explicit_interface(
+    hass: HomeAssistant,
+) -> None:
+    """Test selecting specific interface stores it correctly."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_AUTO_DISCOVERY: False},
+    )
+    config_entry.add_to_hass(hass)
+
+    with patch(
+        "homeassistant.components.govee_light_local.config_flow.network.async_get_adapters",
+        return_value=MOCK_ADAPTERS,
+    ):
+        result = await hass.config_entries.options.async_init(config_entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            user_input={"next_step_id": "add_device"},
+        )
+
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            user_input={
+                CONF_DEVICE_IP: "192.168.1.200",
+                CONF_DEVICE_INTERFACE: "10.0.0.1",
+            },
+        )
+
+        assert result["type"] == "create_entry"
+        assert result["data"][CONF_MANUAL_DEVICES] == {"192.168.1.200": "10.0.0.1"}
 
 
 async def test_options_flow_configure_interfaces(hass: HomeAssistant) -> None:

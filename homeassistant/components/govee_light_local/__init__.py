@@ -47,6 +47,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: GoveeLocalConfigEntry) -
         source_ips = {ip for ip in source_ips if ip in config.listening_interfaces}
         _LOGGER.debug("Filtered source IPs to configured interfaces: %s", source_ips)
 
+    device_interfaces = config.manual_device_interfaces
+    if device_interfaces:
+        source_ips |= device_interfaces
+        _LOGGER.debug("Added per-device interfaces: %s", device_interfaces)
+
     coordinator = GoveeLocalApiCoordinator(
         hass=hass, config_entry=entry, source_ips=source_ips
     )
@@ -59,9 +64,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: GoveeLocalConfigEntry) -
     entry.async_on_unload(await_cleanup)
     entry.async_on_unload(entry.add_update_listener(update_options_listener))
 
-    if entry.options and CONF_MANUAL_DEVICES in entry.options:
-        for device in entry.options[CONF_MANUAL_DEVICES]:
-            coordinator.add_device_to_discovery_queue(device)
+    if config.manual_devices:
+        for device_ip in config.manual_devices:
+            coordinator.add_device_to_discovery_queue(device_ip)
 
     try:
         await coordinator.start()
@@ -101,9 +106,15 @@ async def update_options_listener(
     config: GoveeLocalApiConfig = GoveeLocalApiConfig.from_config_entry(config_entry)
 
     if config.option_mode == OptionMode.ADD_DEVICE and config.manual_devices:
-        for ip in config.manual_devices:
+        needs_reload = False
+        for ip, interface in config.manual_devices.items():
             if coordinator.get_device_by_ip(ip) is None:
                 coordinator.add_device_to_discovery_queue(ip)
+            if interface is not None:
+                needs_reload = True
+        if needs_reload:
+            await hass.config_entries.async_reload(config_entry.entry_id)
+            return
 
     if config.option_mode == OptionMode.REMOVE_DEVICE and config.ips_to_remove:
         for ip in config.ips_to_remove:
@@ -116,9 +127,15 @@ async def update_options_listener(
             updated_options[CONF_IPS_TO_REMOVE] = {
                 item for item in updated_options[CONF_IPS_TO_REMOVE] if item != ip
             }
-            updated_options[CONF_MANUAL_DEVICES] = {
-                item for item in updated_options[CONF_MANUAL_DEVICES] if item != ip
-            }
+            manual_devices = updated_options.get(CONF_MANUAL_DEVICES, {})
+            if isinstance(manual_devices, (list, set)):
+                updated_options[CONF_MANUAL_DEVICES] = {
+                    item for item in manual_devices if item != ip
+                }
+            else:
+                updated_options[CONF_MANUAL_DEVICES] = {
+                    k: v for k, v in manual_devices.items() if k != ip
+                }
             hass.config_entries.async_update_entry(
                 config_entry, options=updated_options
             )

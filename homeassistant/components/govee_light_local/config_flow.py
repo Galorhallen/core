@@ -31,6 +31,7 @@ from homeassistant.helpers.selector import (
 from . import async_get_source_ips
 from .const import (
     CONF_AUTO_DISCOVERY,
+    CONF_DEVICE_INTERFACE,
     CONF_DEVICE_IP,
     CONF_IPS_TO_REMOVE,
     CONF_LISTENING_INTERFACES,
@@ -219,8 +220,14 @@ class GoveeOptionsFlowHandler(OptionsFlow):
         super().__init__()
         self._config_entry = config_entry
 
+        raw_devices = config_entry.options.get(CONF_MANUAL_DEVICES, {})
+        if isinstance(raw_devices, (list, set)):
+            manual_devices = dict.fromkeys(raw_devices)
+        else:
+            manual_devices = dict(raw_devices)
+
         self._options = {
-            CONF_MANUAL_DEVICES: set(config_entry.options.get(CONF_MANUAL_DEVICES, [])),
+            CONF_MANUAL_DEVICES: manual_devices,
             CONF_AUTO_DISCOVERY: config_entry.options.get(
                 CONF_AUTO_DISCOVERY,
                 config_entry.data.get(CONF_AUTO_DISCOVERY, True),
@@ -288,15 +295,32 @@ class GoveeOptionsFlowHandler(OptionsFlow):
                     reason="invalid_ip", description_placeholders={"ip": user_ip}
                 )
 
-            self._options.setdefault(CONF_MANUAL_DEVICES, set()).add(user_ip)
+            interface = user_input.get(CONF_DEVICE_INTERFACE, "") or None
+            self._options.setdefault(CONF_MANUAL_DEVICES, {})[user_ip] = interface
             return self.async_create_entry(
                 title="",
                 data={**self._options, CONF_OPTION_MODE: OptionMode.ADD_DEVICE},
             )
 
-        option_schema = {
+        adapter_options = await async_get_adapter_options(self.hass)
+
+        option_schema: dict[vol.Marker, Any] = {
             vol.Required(CONF_DEVICE_IP): vol.All(cv.string),
         }
+
+        if len(adapter_options) > 1:
+            option_schema[vol.Optional(CONF_DEVICE_INTERFACE, default="")] = (
+                SelectSelector(
+                    SelectSelectorConfig(
+                        options=[
+                            SelectOptionDict(label="Auto", value=""),
+                            *adapter_options,
+                        ],
+                        custom_value=False,
+                        mode=SelectSelectorMode.DROPDOWN,
+                    )
+                )
+            )
 
         return self.async_show_form(
             step_id="add_device",
