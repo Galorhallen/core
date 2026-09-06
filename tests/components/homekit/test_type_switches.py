@@ -5,9 +5,11 @@ from datetime import timedelta
 from freezegun import freeze_time
 import pytest
 
+from homeassistant.components.homekit.accessories import HomeDriver
 from homeassistant.components.homekit.const import (
     ATTR_VALUE,
     CHAR_CONFIGURED_NAME,
+    CHAR_NAME,
     SERV_OUTLET,
     TYPE_FAUCET,
     TYPE_SHOWER,
@@ -620,6 +622,57 @@ async def test_input_select_switch(
 
 @pytest.mark.parametrize(
     "domain",
+    ["input_select", "select"],
+)
+async def test_select_switch_with_options_needing_name_cleanup(
+    hass: HomeAssistant, hk_driver: HomeDriver, events: list[Event], domain: str
+) -> None:
+    """Test select options altered by HomeKit name cleanup still sync state."""
+    entity_id = f"{domain}.test"
+    options = ["always_on", "always on"]
+
+    hass.states.async_set(entity_id, "always_on", {ATTR_OPTIONS: options})
+    await hass.async_block_till_done()
+    acc = SelectSwitch(hass, hk_driver, "SelectSwitch", entity_id, 2, None)
+    acc.run()
+    await hass.async_block_till_done()
+
+    outlets = [serv for serv in acc.services if serv.display_name == SERV_OUTLET]
+    assert [serv.get_characteristic(CHAR_NAME).value for serv in outlets] == [
+        "always on",
+        "always on",
+    ]
+    assert [
+        serv.get_characteristic(CHAR_CONFIGURED_NAME).value for serv in outlets
+    ] == ["always on", "always on"]
+
+    assert {option: char.value for option, char in acc.select_chars.items()} == {
+        "always_on": True,
+        "always on": False,
+    }
+
+    hass.states.async_set(entity_id, "always on", {ATTR_OPTIONS: options})
+    await hass.async_block_till_done()
+    assert {option: char.value for option, char in acc.select_chars.items()} == {
+        "always_on": False,
+        "always on": True,
+    }
+
+    call_select_option = async_mock_service(hass, domain, SERVICE_SELECT_OPTION)
+    acc.select_chars["always_on"].client_update_value(True)
+    await hass.async_block_till_done()
+
+    assert call_select_option
+    assert call_select_option[0].data == {
+        "entity_id": entity_id,
+        "option": "always_on",
+    }
+    assert len(events) == 1
+    assert events[-1].data[ATTR_VALUE] is None
+
+
+@pytest.mark.parametrize(
+    "domain",
     ["button", "input_button"],
 )
 async def test_button_switch(
@@ -884,3 +937,225 @@ async def test_valve_with_duration_characteristics(
         await hass.async_block_till_done()
         assert acc.get_duration() == 900
         assert acc.get_remaining_duration() == 600
+
+
+async def test_duration_characteristic_properties(
+    hass: HomeAssistant, hk_driver, events: list[Event]
+) -> None:
+    """Test duration characteristic properties from linked attributes."""
+    entity_id = "switch.sprinkler"
+    linked_duration_entity = "input_number.valve_duration"
+    linked_end_time_entity = "sensor.valve_end_time"
+
+    # Case 1: linked input_number has min, max, step attributes
+    hass.states.async_set(entity_id, STATE_OFF)
+    hass.states.async_set(
+        linked_duration_entity,
+        "120",
+        {
+            "min": 10,
+            "max": 900,
+            "step": 5,
+        },
+    )
+    hass.states.async_set(linked_end_time_entity, dt_util.utcnow().isoformat())
+    await hass.async_block_till_done()
+
+    acc = ValveSwitch(
+        hass,
+        hk_driver,
+        "Sprinkler",
+        entity_id,
+        5,
+        {
+            "type": "sprinkler",
+            "linked_valve_duration": linked_duration_entity,
+            "linked_valve_end_time": linked_end_time_entity,
+        },
+    )
+    acc.run()
+    await hass.async_block_till_done()
+
+    set_duration_props = acc.char_set_duration.properties
+    assert set_duration_props["minValue"] == 10
+    assert set_duration_props["maxValue"] == 900
+    assert set_duration_props["minStep"] == 5
+
+    remaining_duration_props = acc.char_remaining_duration.properties
+    assert remaining_duration_props["minValue"] == 0
+    assert remaining_duration_props["maxValue"] == 900
+    assert remaining_duration_props["minStep"] == 1
+
+    # Case 2: linked input_number missing attributes, should use defaults
+    hass.states.async_set(
+        linked_duration_entity,
+        "60",
+        {},  # No min, max, step
+    )
+    await hass.async_block_till_done()
+
+    acc = ValveSwitch(
+        hass,
+        hk_driver,
+        "Sprinkler",
+        entity_id,
+        6,
+        {
+            "type": "sprinkler",
+            "linked_valve_duration": linked_duration_entity,
+            "linked_valve_end_time": linked_end_time_entity,
+        },
+    )
+    acc.run()
+    await hass.async_block_till_done()
+
+    set_duration_props = acc.char_set_duration.properties
+    assert set_duration_props["minValue"] == 0
+    assert set_duration_props["maxValue"] == 3600
+    assert set_duration_props["minStep"] == 1
+
+    remaining_duration_props = acc.char_remaining_duration.properties
+    assert remaining_duration_props["minValue"] == 0
+    assert remaining_duration_props["maxValue"] == 60 * 60 * 48
+    assert remaining_duration_props["minStep"] == 1
+
+    # Case 4: linked input_number missing attribute value, should use defaults
+    hass.states.async_set(
+        linked_duration_entity,
+        "60",
+        {
+            "min": 900,
+            "max": None,  # No value
+        },
+    )
+    await hass.async_block_till_done()
+
+    acc = ValveSwitch(
+        hass,
+        hk_driver,
+        "Sprinkler",
+        entity_id,
+        6,
+        {
+            "type": "sprinkler",
+            "linked_valve_duration": linked_duration_entity,
+            "linked_valve_end_time": linked_end_time_entity,
+        },
+    )
+    acc.run()
+    await hass.async_block_till_done()
+
+    set_duration_props = acc.char_set_duration.properties
+    assert set_duration_props["minValue"] == 900
+    assert set_duration_props["maxValue"] == 3600
+    assert set_duration_props["minStep"] == 1
+
+    remaining_duration_props = acc.char_remaining_duration.properties
+    assert remaining_duration_props["minValue"] == 0
+    assert remaining_duration_props["maxValue"] == 60 * 60 * 48
+    assert remaining_duration_props["minStep"] == 1
+
+    # Case 3: linked input_number missing state, should use defaults
+    hass.states.async_remove(linked_duration_entity)
+    await hass.async_block_till_done()
+
+    acc = ValveSwitch(
+        hass,
+        hk_driver,
+        "Sprinkler",
+        entity_id,
+        7,
+        {
+            "type": "sprinkler",
+            "linked_valve_duration": linked_duration_entity,
+            "linked_valve_end_time": linked_end_time_entity,
+        },
+    )
+    acc.run()
+    await hass.async_block_till_done()
+
+    set_duration_props = acc.char_set_duration.properties
+    assert set_duration_props["minValue"] == 0
+    assert set_duration_props["maxValue"] == 3600
+    assert set_duration_props["minStep"] == 1
+
+    remaining_duration_props = acc.char_remaining_duration.properties
+    assert remaining_duration_props["minValue"] == 0
+    assert remaining_duration_props["maxValue"] == 60 * 60 * 48
+    assert remaining_duration_props["minStep"] == 1
+
+    # Case 5: Attribute is not valid
+    assert acc._get_linked_duration_property("invalid_property", 1000) == 1000
+
+
+async def test_remaining_duration_characteristic_fallback(
+    hass: HomeAssistant, hk_driver, events: list[Event]
+) -> None:
+    """Test remaining duration falls back to default only if valve active."""
+    entity_id = "switch.sprinkler"
+
+    hass.states.async_set(entity_id, STATE_OFF)
+    hass.states.async_set("input_number.valve_duration", "900")
+    hass.states.async_set("sensor.valve_end_time", None)
+    await hass.async_block_till_done()
+
+    acc = ValveSwitch(
+        hass,
+        hk_driver,
+        "Sprinkler",
+        entity_id,
+        5,
+        {
+            "type": "sprinkler",
+            "linked_valve_duration": "input_number.valve_duration",
+            "linked_valve_end_time": "sensor.valve_end_time",
+        },
+    )
+    acc.run()
+    await hass.async_block_till_done()
+
+    # Case 1: Remaining duration should always be 0 when accessory is not in use
+    hass.states.async_set(entity_id, STATE_OFF)
+    await hass.async_block_till_done()
+    assert acc.char_in_use.value == 0
+    assert acc.get_remaining_duration() == 0
+
+    # Case 2: Remaining duration should fall back to default duration when accessory is
+    # in use
+    hass.states.async_set(entity_id, STATE_ON)
+    await hass.async_block_till_done()
+    assert acc.char_in_use.value == 1
+    assert acc.get_remaining_duration() == 900
+
+    # Case 3: Remaining duration calculated from linked end time if state is available
+    with freeze_time(dt_util.utcnow()):
+        # End time is in the futue and valve is in use
+        hass.states.async_set(
+            "sensor.valve_end_time",
+            (dt_util.utcnow() + timedelta(seconds=3600)).isoformat(),
+        )
+        await hass.async_block_till_done()
+        assert acc.char_in_use.value == 1
+        assert acc.get_remaining_duration() == 3600
+
+        # End time is in the futue and valve is not in use
+        hass.states.async_set(entity_id, STATE_OFF)
+        await hass.async_block_till_done()
+        assert acc.char_in_use.value == 0
+        assert acc.get_remaining_duration() == 3600
+
+        # End time is in the past and valve is in use, returning 0
+        hass.states.async_set(entity_id, STATE_ON)
+        hass.states.async_set(
+            "sensor.valve_end_time",
+            (dt_util.utcnow() - timedelta(seconds=3600)).isoformat(),
+        )
+        await hass.async_block_till_done()
+        assert acc.char_in_use.value == 1
+        assert acc.get_remaining_duration() == 0
+
+        # End time is in the past and valve is not in use, returning 0
+        hass.states.async_set(entity_id, STATE_OFF)
+        await hass.async_block_till_done()
+        assert acc.char_in_use.value == 0
+        assert acc.get_remaining_duration() == 0

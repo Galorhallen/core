@@ -1,9 +1,7 @@
 """Signal Messenger for notify component."""
 
-from __future__ import annotations
-
 import logging
-from typing import Any
+from typing import Any, override
 
 from pysignalclirestapi import SignalCliRestApi, SignalCliRestApiError
 import requests
@@ -11,6 +9,7 @@ import voluptuous as vol
 
 from homeassistant.components.notify import (
     ATTR_DATA,
+    ATTR_TARGET,
     PLATFORM_SCHEMA as NOTIFY_PLATFORM_SCHEMA,
     BaseNotificationService,
 )
@@ -97,10 +96,13 @@ class SignalNotificationService(BaseNotificationService):
         self._recp_nrs = recp_nrs
         self._signal_cli_rest_api = signal_cli_rest_api
 
+    @override
     def send_message(self, message: str = "", **kwargs: Any) -> None:
-        """Send a message to a one or more recipients. Additionally a file can be attached."""
+        """Send a message to one or more recipients."""
 
         _LOGGER.debug("Sending signal message")
+
+        recipients: list[str] = kwargs.get(ATTR_TARGET) or self._recp_nrs
 
         data = kwargs.get(ATTR_DATA)
 
@@ -117,9 +119,10 @@ class SignalNotificationService(BaseNotificationService):
         try:
             self._signal_cli_rest_api.send_message(
                 message,
-                self._recp_nrs,
-                filenames,
-                attachments_as_bytes,
+                recipients,
+                notify_self=True,
+                filenames=filenames,
+                attachments_as_bytes=attachments_as_bytes,
                 text_mode="normal" if data is None else data.get(ATTR_TEXTMODE),
             )
         except SignalCliRestApiError as ex:

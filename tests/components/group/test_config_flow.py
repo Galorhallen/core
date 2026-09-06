@@ -1,4 +1,4 @@
-"""Test the Switch config flow."""
+"""Test the Group config flow."""
 
 from typing import Any
 from unittest.mock import patch
@@ -60,6 +60,7 @@ from tests.typing import WebSocketGenerator
         ),
         ("switch", "on", "on", {}, {}, {"all": False}, {}),
         ("switch", "on", "on", {}, {"all": True}, {"all": True}, {}),
+        ("valve", "open", "open", {}, {}, {}, {}),
     ],
 )
 async def test_config_flow(
@@ -148,6 +149,7 @@ async def test_config_flow(
         ("notify", {}),
         ("media_player", {}),
         ("switch", {}),
+        ("valve", {}),
     ],
 )
 async def test_config_flow_hides_members(
@@ -222,6 +224,7 @@ async def test_config_flow_hides_members(
             {"ignore_non_numeric": False, "type": "sum"},
         ),
         ("switch", "on", {"all": False}, {}),
+        ("valve", "open", {}, {}),
     ],
 )
 async def test_options(
@@ -314,20 +317,16 @@ async def test_options(
 
 
 @pytest.mark.parametrize(
-    ("group_type", "extra_options", "extra_options_after", "advanced"),
+    ("group_type", "extra_options", "extra_options_after"),
     [
-        ("light", {"all": False}, {"all": False}, False),
-        ("light", {"all": True}, {"all": False}, False),
-        ("light", {"all": False}, {"all": False}, True),
-        ("light", {"all": True}, {"all": False}, True),
-        ("switch", {"all": False}, {"all": False}, False),
-        ("switch", {"all": True}, {"all": False}, False),
-        ("switch", {"all": False}, {"all": False}, True),
-        ("switch", {"all": True}, {"all": False}, True),
+        ("light", {"all": False}, {"all": False}),
+        ("light", {"all": True}, {"all": False}),
+        ("switch", {"all": False}, {"all": False}),
+        ("switch", {"all": True}, {"all": False}),
     ],
 )
 async def test_all_options(
-    hass: HomeAssistant, group_type, extra_options, extra_options_after, advanced
+    hass: HomeAssistant, group_type, extra_options, extra_options_after
 ) -> None:
     """Test reconfiguring."""
     members1 = [f"{group_type}.one", f"{group_type}.two"]
@@ -353,9 +352,7 @@ async def test_all_options(
 
     config_entry = hass.config_entries.async_entries(DOMAIN)[0]
 
-    result = await hass.config_entries.options.async_init(
-        config_entry.entry_id, context={"show_advanced_options": advanced}
-    )
+    result = await hass.config_entries.options.async_init(config_entry.entry_id)
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == group_type
 
@@ -404,6 +401,7 @@ async def test_all_options(
         ("notify", {}),
         ("media_player", {}),
         ("switch", {}),
+        ("valve", {}),
     ],
 )
 async def test_options_flow_hides_members(
@@ -472,12 +470,11 @@ async def test_options_flow_hides_members(
     assert entity_registry.async_get(f"{group_type}.three").hidden_by == hidden_by
 
 
-COVER_ATTRS = [{"supported_features": 0}, {}]
+COVER_ATTRS = [{"supported_features": 0}, {"is_closed": False}]
 EVENT_ATTRS = [{"event_types": []}, {"event_type": None}]
 FAN_ATTRS = [{"supported_features": 0}, {}]
 LIGHT_ATTRS = [
     {
-        "icon": "mdi:lightbulb-group",
         "supported_color_modes": ["onoff"],
         "supported_features": 0,
     },
@@ -487,6 +484,7 @@ LOCK_ATTRS = [{"supported_features": 1}, {}]
 NOTIFY_ATTRS = [{"supported_features": 0}, {}]
 MEDIA_PLAYER_ATTRS = [{"supported_features": 0}, {}]
 SENSOR_ATTRS = [{"icon": "mdi:calculator"}, {"max_entity_id": "sensor.input_two"}]
+VALVE_ATTRS = [{"supported_features": 0}, {"is_closed": False}]
 
 
 @pytest.mark.parametrize(
@@ -503,6 +501,7 @@ SENSOR_ATTRS = [{"icon": "mdi:calculator"}, {"max_entity_id": "sensor.input_two"
         ("media_player", {}, ["on", "off"], "on", MEDIA_PLAYER_ATTRS),
         ("sensor", {"type": "max"}, ["10", "20"], "20.0", SENSOR_ATTRS),
         ("switch", {}, ["on", "off"], "on", [{}, {}]),
+        ("valve", {}, ["open", "closed"], "open", VALVE_ATTRS),
     ],
 )
 async def test_config_flow_preview(
@@ -621,6 +620,7 @@ async def test_config_flow_preview(
             SENSOR_ATTRS,
         ),
         ("switch", {}, {}, ["on", "off"], "on", [{}, {}]),
+        ("valve", {}, {}, ["open", "closed"], "open", VALVE_ATTRS),
     ],
 )
 async def test_option_flow_preview(

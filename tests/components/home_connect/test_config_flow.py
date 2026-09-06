@@ -10,7 +10,7 @@ import pytest
 
 from homeassistant import config_entries, setup
 from homeassistant.components.home_connect.const import DOMAIN
-from homeassistant.config_entries import ConfigEntryState
+from homeassistant.config_entries import ConfigEntryState, ConfigFlowContext
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import config_entry_oauth2_flow, device_registry as dr
@@ -104,7 +104,7 @@ async def test_full_flow(
     assert await setup.async_setup_component(hass, "home_connect", {})
 
     result = await hass.config_entries.flow.async_init(
-        "home_connect", context={"source": config_entries.SOURCE_USER}
+        DOMAIN, context=ConfigFlowContext(source=config_entries.SOURCE_USER)
     )
     state = config_entry_oauth2_flow._encode_jwt(
         hass,
@@ -159,7 +159,7 @@ async def test_prevent_reconfiguring_same_account(
     assert await setup.async_setup_component(hass, "home_connect", {})
 
     result = await hass.config_entries.flow.async_init(
-        "home_connect", context={"source": config_entries.SOURCE_USER}
+        DOMAIN, context=ConfigFlowContext(source=config_entries.SOURCE_USER)
     )
     state = config_entry_oauth2_flow._encode_jwt(
         hass,
@@ -312,7 +312,7 @@ async def test_zeroconf_flow(
     assert await setup.async_setup_component(hass, "home_connect", {})
 
     result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": config_entries.SOURCE_ZEROCONF}
+        DOMAIN, context=ConfigFlowContext(source=config_entries.SOURCE_ZEROCONF)
     )
 
     assert result["type"] is FlowResultType.FORM
@@ -375,7 +375,7 @@ async def test_zeroconf_flow_already_setup(
 
     result = await hass.config_entries.flow.async_init(
         DOMAIN,
-        context={"source": config_entries.SOURCE_ZEROCONF},
+        context=ConfigFlowContext(source=config_entries.SOURCE_ZEROCONF),
         data=DHCP_DISCOVERY[0],
     )
     assert result["type"] is FlowResultType.ABORT
@@ -393,7 +393,9 @@ async def test_dhcp_flow(
     """Test DHCP discovery."""
 
     result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": config_entries.SOURCE_DHCP}, data=dhcp_discovery
+        DOMAIN,
+        context=ConfigFlowContext(source=config_entries.SOURCE_DHCP),
+        data=dhcp_discovery,
     )
 
     assert result["type"] is FlowResultType.FORM
@@ -452,7 +454,9 @@ async def test_dhcp_flow_already_setup(
     config_entry.add_to_hass(hass)
 
     result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": config_entries.SOURCE_DHCP}, data=DHCP_DISCOVERY[0]
+        DOMAIN,
+        context=ConfigFlowContext(source=config_entries.SOURCE_DHCP),
+        data=DHCP_DISCOVERY[0],
     )
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "already_configured"
@@ -494,17 +498,23 @@ async def test_dhcp_flow_complete_device_information(
     assert await integration_setup(client)
     assert config_entry.state is ConfigEntryState.LOADED
 
-    device = device_registry.async_get_device(identifiers={(DOMAIN, appliance.ha_id)})
+    device = device_registry.async_get_device_by_identifier(
+        (DOMAIN, appliance.ha_id), config_entry.entry_id
+    )
     assert device
     assert device.connections == set()
 
     result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": config_entries.SOURCE_DHCP}, data=dhcp_discovery
+        DOMAIN,
+        context=ConfigFlowContext(source=config_entries.SOURCE_DHCP),
+        data=dhcp_discovery,
     )
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "already_configured"
 
-    device = device_registry.async_get_device(identifiers={(DOMAIN, appliance.ha_id)})
+    device = device_registry.async_get_device_by_identifier(
+        (DOMAIN, appliance.ha_id), config_entry.entry_id
+    )
     assert device
     assert device.connections == {
         (dr.CONNECTION_NETWORK_MAC, dr.format_mac(dhcp_discovery.macaddress))

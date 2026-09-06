@@ -1,46 +1,32 @@
 """Component to interface with locks that can be controlled remotely."""
 
-from __future__ import annotations
-
 from datetime import timedelta
 from enum import IntFlag
 import functools as ft
 import logging
 import re
-from typing import TYPE_CHECKING, Any, final
+from typing import TYPE_CHECKING, Any, final, override
 
 from propcache.api import cached_property
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (  # noqa: F401
-    _DEPRECATED_STATE_JAMMED,
-    _DEPRECATED_STATE_LOCKED,
-    _DEPRECATED_STATE_LOCKING,
-    _DEPRECATED_STATE_UNLOCKED,
-    _DEPRECATED_STATE_UNLOCKING,
     ATTR_CODE,
     ATTR_CODE_FORMAT,
     SERVICE_LOCK,
     SERVICE_OPEN,
     SERVICE_UNLOCK,
-    STATE_OPEN,
-    STATE_OPENING,
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.deprecation import (
-    all_with_deprecated_constants,
-    check_if_deprecated_constant,
-    dir_with_deprecated_constants,
-)
 from homeassistant.helpers.entity import Entity, EntityDescription
 from homeassistant.helpers.entity_component import EntityComponent
 from homeassistant.helpers.typing import ConfigType, StateType
 from homeassistant.util.hass_dict import HassKey
 
-from .const import DOMAIN, LockState
+from .const import DOMAIN, LockEntityStateAttribute, LockState
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -66,7 +52,10 @@ class LockEntityFeature(IntFlag):
     OPEN = 1
 
 
-PROP_TO_ATTR = {"changed_by": ATTR_CHANGED_BY, "code_format": ATTR_CODE_FORMAT}
+PROP_TO_ATTR = {
+    "changed_by": LockEntityStateAttribute.CHANGED_BY,
+    "code_format": LockEntityStateAttribute.CODE_FORMAT,
+}
 
 # mypy: disallow-any-generics
 
@@ -256,9 +245,10 @@ class LockEntity(Entity, cached_properties=CACHED_PROPERTIES_WITH_ATTR_):
 
     @final
     @property
+    @override
     def state_attributes(self) -> dict[str, StateType]:
         """Return the state attributes."""
-        state_attr = {}
+        state_attr: dict[str, StateType] = {}
         for prop, attr in PROP_TO_ATTR.items():
             if (value := getattr(self, prop)) is not None:
                 state_attr[attr] = value
@@ -266,6 +256,7 @@ class LockEntity(Entity, cached_properties=CACHED_PROPERTIES_WITH_ATTR_):
 
     @final
     @property
+    @override
     def state(self) -> str | None:
         """Return the state."""
         if self.is_jammed:
@@ -283,10 +274,12 @@ class LockEntity(Entity, cached_properties=CACHED_PROPERTIES_WITH_ATTR_):
         return LockState.LOCKED if locked else LockState.UNLOCKED
 
     @cached_property
+    @override
     def supported_features(self) -> LockEntityFeature:
         """Return the list of supported features."""
         return self._attr_supported_features
 
+    @override
     async def async_internal_added_to_hass(self) -> None:
         """Call when the sensor entity is added to hass."""
         await super().async_internal_added_to_hass()
@@ -295,6 +288,7 @@ class LockEntity(Entity, cached_properties=CACHED_PROPERTIES_WITH_ATTR_):
         self._async_read_entity_options()
 
     @callback
+    @override
     def async_registry_entry_updated(self) -> None:
         """Run when the entity registry entry has been updated."""
         self._async_read_entity_options()
@@ -317,11 +311,3 @@ class LockEntity(Entity, cached_properties=CACHED_PROPERTIES_WITH_ATTR_):
             return
 
         self._lock_option_default_code = ""
-
-
-# These can be removed if no deprecated constant are in this module anymore
-__getattr__ = ft.partial(check_if_deprecated_constant, module_globals=globals())
-__dir__ = ft.partial(
-    dir_with_deprecated_constants, module_globals_keys=[*globals().keys()]
-)
-__all__ = all_with_deprecated_constants(globals())

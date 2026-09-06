@@ -1,11 +1,13 @@
 """The NEW_NAME integration."""
 
-from __future__ import annotations
-
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import aiohttp_client, config_entry_oauth2_flow
+from homeassistant.helpers import aiohttp_client
+from homeassistant.helpers.config_entry_oauth2_flow import (
+    OAuth2Session,
+    async_get_config_entry_implementation,
+)
 
 from . import api
 
@@ -21,13 +23,9 @@ type New_NameConfigEntry = ConfigEntry[api.AsyncConfigEntryAuth]
 # # TODO Update entry annotation
 async def async_setup_entry(hass: HomeAssistant, entry: New_NameConfigEntry) -> bool:
     """Set up NEW_NAME from a config entry."""
-    implementation = (
-        await config_entry_oauth2_flow.async_get_config_entry_implementation(
-            hass, entry
-        )
-    )
+    implementation = await async_get_config_entry_implementation(hass, entry)
 
-    session = config_entry_oauth2_flow.OAuth2Session(hass, entry, implementation)
+    session = OAuth2Session(hass, entry, implementation)
 
     # If using a requests-based API lib
     entry.runtime_data = api.ConfigEntryAuth(hass, session)

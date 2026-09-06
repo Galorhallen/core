@@ -1,8 +1,6 @@
 """Config flow for melnor."""
 
-from __future__ import annotations
-
-from typing import Any
+from typing import Any, override
 
 import voluptuous as vol
 
@@ -47,6 +45,7 @@ class MelnorConfigFlow(ConfigFlow, domain=DOMAIN):
             description_placeholders={"name": self._discovered_address},
         )
 
+    @override
     async def async_step_bluetooth(
         self, discovery_info: BluetoothServiceInfoBleak
     ) -> ConfigFlowResult:
@@ -75,7 +74,7 @@ class MelnorConfigFlow(ConfigFlow, domain=DOMAIN):
 
             return self._create_entry(address)
 
-        current_addresses = self._async_current_ids()
+        current_addresses = self._async_current_ids(include_ignore=False)
         for discovery_info in async_discovered_service_info(
             self.hass, connectable=True
         ):
@@ -105,6 +104,7 @@ class MelnorConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=vol.Schema({vol.Required(CONF_ADDRESS): vol.In(addresses)}),
         )
 
+    @override
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:

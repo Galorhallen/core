@@ -1,12 +1,9 @@
 """Home Assistant auth provider."""
 
-from __future__ import annotations
-
 import asyncio
 import base64
 from collections.abc import Mapping
-import logging
-from typing import Any, cast
+from typing import Any, cast, override
 
 import bcrypt
 import voluptuous as vol
@@ -14,7 +11,6 @@ import voluptuous as vol
 from homeassistant.const import CONF_ID
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.storage import Store
 
 from ..models import AuthFlowContext, AuthFlowResult, Credentials, UserMeta
@@ -87,19 +83,10 @@ class Data:
             hass, STORAGE_VERSION, STORAGE_KEY, private=True, atomic_writes=True
         )
         self._data: dict[str, list[dict[str, str]]] | None = None
-        # Legacy mode will allow usernames to start/end with whitespace
-        # and will compare usernames case-insensitive.
-        # Deprecated in June 2019 and will be removed in 2026.7
-        self.is_legacy = False
 
     @callback
-    def normalize_username(
-        self, username: str, *, force_normalize: bool = False
-    ) -> str:
+    def normalize_username(self, username: str) -> str:
         """Normalize a username based on the mode."""
-        if self.is_legacy and not force_normalize:
-            return username
-
         return username.strip().casefold()
 
     async def async_load(self) -> None:
@@ -107,49 +94,7 @@ class Data:
         if (data := await self._store.async_load()) is None:
             data = cast(dict[str, list[dict[str, str]]], {"users": []})
 
-        self._async_check_for_not_normalized_usernames(data)
         self._data = data
-
-    @callback
-    def _async_check_for_not_normalized_usernames(
-        self, data: dict[str, list[dict[str, str]]]
-    ) -> None:
-        not_normalized_usernames: set[str] = set()
-
-        for user in data["users"]:
-            username = user["username"]
-
-            if self.normalize_username(username, force_normalize=True) != username:
-                logging.getLogger(__name__).warning(
-                    (
-                        "Home Assistant auth provider is running in legacy mode "
-                        "because we detected usernames that are normalized (lowercase and without spaces)."
-                        " Please change the username: '%s'."
-                    ),
-                    username,
-                )
-                not_normalized_usernames.add(username)
-
-        if not_normalized_usernames:
-            self.is_legacy = True
-            ir.async_create_issue(
-                self.hass,
-                "auth",
-                "homeassistant_provider_not_normalized_usernames",
-                breaks_in_ha_version="2026.7.0",
-                is_fixable=False,
-                severity=ir.IssueSeverity.WARNING,
-                translation_key="homeassistant_provider_not_normalized_usernames",
-                translation_placeholders={
-                    "usernames": f'- "{'"\n- "'.join(sorted(not_normalized_usernames))}"'
-                },
-                learn_more_url="homeassistant://config/users",
-            )
-        else:
-            self.is_legacy = False
-            ir.async_delete_issue(
-                self.hass, "auth", "homeassistant_provider_not_normalized_usernames"
-            )
 
     @property
     def users(self) -> list[dict[str, str]]:
@@ -179,12 +124,18 @@ class Data:
         user_hash = base64.b64decode(found["password"])
 
         # bcrypt.checkpw is timing-safe
-        if not bcrypt.checkpw(password.encode(), user_hash):
+        # With bcrypt 5.0 passing a password longer than 72 bytes raises a ValueError.
+        # Previously the password was silently truncated.
+        # https://github.com/pyca/bcrypt/pull/1000
+        if not bcrypt.checkpw(password.encode()[:72], user_hash):
             raise InvalidAuth
 
     def hash_password(self, password: str, for_storage: bool = False) -> bytes:
         """Encode a password."""
-        hashed: bytes = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12))
+        # With bcrypt 5.0 passing a password longer than 72 bytes raises a ValueError.
+        # Previously the password was silently truncated.
+        # https://github.com/pyca/bcrypt/pull/1000
+        hashed: bytes = bcrypt.hashpw(password.encode()[:72], bcrypt.gensalt(rounds=12))
 
         if for_storage:
             hashed = base64.b64encode(hashed)
@@ -240,9 +191,7 @@ class Data:
 
         Raises InvalidUsername if the new username is invalid.
         """
-        normalized_username = self.normalize_username(
-            new_username, force_normalize=True
-        )
+        normalized_username = self.normalize_username(new_username)
         if normalized_username != new_username:
             raise InvalidUsername(
                 translation_key="username_not_normalized",
@@ -272,7 +221,6 @@ class Data:
             if self.normalize_username(user["username"]) == username:
                 user["username"] = new_username
                 assert self._data is not None
-                self._async_check_for_not_normalized_usernames(self._data)
                 break
         else:
             raise InvalidUser(translation_key="user_not_found")
@@ -295,6 +243,7 @@ class HassAuthProvider(AuthProvider):
         self.data: Data | None = None
         self._init_lock = asyncio.Lock()
 
+    @override
     async def async_initialize(self) -> None:
         """Initialize the auth provider."""
         async with self._init_lock:
@@ -305,6 +254,7 @@ class HassAuthProvider(AuthProvider):
             await data.async_load()
             self.data = data
 
+    @override
     async def async_login_flow(self, context: AuthFlowContext | None) -> HassLoginFlow:
         """Return a flow to login."""
         return HassLoginFlow(self)
@@ -362,6 +312,7 @@ class HassAuthProvider(AuthProvider):
         )
         await self.data.async_save()
 
+    @override
     async def async_get_or_create_credentials(
         self, flow_result: Mapping[str, str]
     ) -> Credentials:
@@ -380,6 +331,7 @@ class HassAuthProvider(AuthProvider):
         # Create new credentials.
         return self.async_create_credentials({"username": username})
 
+    @override
     async def async_user_meta_for_credentials(
         self, credentials: Credentials
     ) -> UserMeta:
@@ -403,6 +355,7 @@ class HassAuthProvider(AuthProvider):
 class HassLoginFlow(LoginFlow[HassAuthProvider]):
     """Handler for the login flow."""
 
+    @override
     async def async_step_init(
         self, user_input: dict[str, str] | None = None
     ) -> AuthFlowResult:

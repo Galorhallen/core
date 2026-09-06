@@ -1,10 +1,9 @@
 """Provides tag scanning for MQTT."""
 
-from __future__ import annotations
-
 from collections.abc import Callable
 import functools
 import logging
+from typing import override
 
 import voluptuous as vol
 
@@ -53,7 +52,9 @@ DISCOVERY_SCHEMA = MQTT_BASE_SCHEMA.extend(
 )
 
 
-async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> None:
+async def async_setup_mqtt_tag_entry(
+    hass: HomeAssistant, config_entry: ConfigEntry
+) -> None:
     """Set up MQTT tag scanner dynamically through MQTT discovery."""
 
     setup = functools.partial(_async_setup_tag, hass, config_entry=config_entry)
@@ -125,6 +126,7 @@ class MQTTTagScanner(MqttDiscoveryDeviceUpdateMixin):
             self, hass, discovery_data, device_id, config_entry, LOG_NAME
         )
 
+    @override
     async def async_update(self, discovery_data: MQTTDiscoveryPayload) -> None:
         """Handle MQTT tag discovery updates."""
         # Update tag scanner
@@ -171,6 +173,7 @@ class MQTTTagScanner(MqttDiscoveryDeviceUpdateMixin):
         )
         subscription.async_subscribe_topics_internal(self.hass, self._sub_state)
 
+    @override
     async def async_tear_down(self) -> None:
         """Cleanup tag scanner."""
         discovery_hash = self.discovery_data[ATTR_DISCOVERY_HASH]

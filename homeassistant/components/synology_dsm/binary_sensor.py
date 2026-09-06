@@ -1,8 +1,7 @@
 """Support for Synology DSM binary sensors."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, override
 
 from synology_dsm.api.core.security import SynoCoreSecurity
 from synology_dsm.api.storage.storage import SynoStorage
@@ -68,7 +67,8 @@ async def async_setup_entry(
     data = entry.runtime_data
     api = data.api
     coordinator = data.coordinator_central
-    assert api.storage is not None
+    if TYPE_CHECKING:
+        assert api.storage is not None
 
     entities: list[SynoDSMSecurityBinarySensor | SynoDSMStorageBinarySensor] = [
         SynoDSMSecurityBinarySensor(api, coordinator, description)
@@ -109,19 +109,23 @@ class SynoDSMSecurityBinarySensor(SynoDSMBinarySensor):
     """Representation a Synology Security binary sensor."""
 
     @property
+    @override
     def is_on(self) -> bool:
         """Return the state."""
         return getattr(self._api.security, self.entity_description.key) != "safe"  # type: ignore[no-any-return]
 
     @property
+    @override
     def available(self) -> bool:
         """Return True if entity is available."""
         return bool(self._api.security) and super().available
 
     @property
+    @override
     def extra_state_attributes(self) -> dict[str, str]:
         """Return security checks details."""
-        assert self._api.security is not None
+        if TYPE_CHECKING:
+            assert self._api.security is not None
         return self._api.security.status_by_check
 
 
@@ -141,6 +145,7 @@ class SynoDSMStorageBinarySensor(SynologyDSMDeviceEntity, SynoDSMBinarySensor):
         super().__init__(api, coordinator, description, device_id)
 
     @property
+    @override
     def is_on(self) -> bool:
         """Return the state."""
         return bool(

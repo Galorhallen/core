@@ -2,6 +2,7 @@
 
 from abc import abstractmethod
 import datetime as dt
+from typing import override
 
 from hdate import Zmanim
 
@@ -37,17 +38,29 @@ class JewishCalendarEntity(CoordinatorEntity[JewishCalendarUpdateCoordinator]):
             identifiers={(DOMAIN, config_entry.entry_id)},
         )
 
+    @override
     async def async_added_to_hass(self) -> None:
         """Call when entity is added to hass."""
         await super().async_added_to_hass()
         self._schedule_update()
 
+    @override
     async def async_will_remove_from_hass(self) -> None:
         """Run when entity will be removed from hass."""
         if self._update_unsub:
             self._update_unsub()
             self._update_unsub = None
         return await super().async_will_remove_from_hass()
+
+    @callback
+    @override
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        # When coordinator updates (e.g., from tests forcing
+        # refresh or midnight update), reschedule our
+        # entity-specific updates
+        self._schedule_update()
+        super()._handle_coordinator_update()
 
     @abstractmethod
     def _update_times(self, zmanim: Zmanim) -> list[dt.datetime | None]:

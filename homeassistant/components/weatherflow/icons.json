@@ -1,10 +1,27 @@
 {
   "entity": {
+    "event": {
+      "lightning_strike_event": {
+        "default": "mdi:weather-lightning"
+      },
+      "precip_start_event": {
+        "default": "mdi:weather-rainy"
+      }
+    },
     "sensor": {
       "lightning_average_distance": {
         "default": "mdi:lightning-bolt"
       },
       "lightning_count": {
+        "default": "mdi:lightning-bolt"
+      },
+      "lightning_strike_last_distance": {
+        "default": "mdi:lightning-bolt"
+      },
+      "lightning_strike_last_energy": {
+        "default": "mdi:lightning-bolt"
+      },
+      "lightning_strike_last_epoch": {
         "default": "mdi:lightning-bolt"
       },
       "precipitation_type": {

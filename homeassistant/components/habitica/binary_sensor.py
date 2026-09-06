@@ -1,15 +1,13 @@
 """Binary sensor platform for Habitica integration."""
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import override
 
 from habiticalib import ContentData, UserData
 
 from homeassistant.components.binary_sensor import (
-    BinarySensorDeviceClass,
     BinarySensorEntity,
     BinarySensorEntityDescription,
 )
@@ -88,11 +86,13 @@ class HabiticaBinarySensorEntity(HabiticaBase, BinarySensorEntity):
     entity_description: HabiticaBinarySensorEntityDescription
 
     @property
+    @override
     def is_on(self) -> bool | None:
         """If the binary sensor is on."""
         return self.entity_description.value_fn(self.coordinator.data.user)
 
     @property
+    @override
     def entity_picture(self) -> str | None:
         """Return the entity picture to use in the frontend, if any."""
         if entity_picture := self.entity_description.entity_picture(
@@ -108,7 +108,6 @@ class HabiticaPartyBinarySensorEntity(HabiticaPartyBase, BinarySensorEntity):
     entity_description = BinarySensorEntityDescription(
         key=HabiticaBinarySensor.QUEST_RUNNING,
         translation_key=HabiticaBinarySensor.QUEST_RUNNING,
-        device_class=BinarySensorDeviceClass.RUNNING,
     )
 
     def __init__(
@@ -121,6 +120,7 @@ class HabiticaPartyBinarySensorEntity(HabiticaPartyBase, BinarySensorEntity):
         super().__init__(coordinator, config_entry, self.entity_description, content)
 
     @property
+    @override
     def is_on(self) -> bool | None:
         """If the binary sensor is on."""
-        return self.coordinator.data.quest.active
+        return self.coordinator.data.party.quest.active

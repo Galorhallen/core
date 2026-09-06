@@ -9,10 +9,14 @@ from govee_local_api.device_registry import DeviceRegistry
 from govee_local_api.light_capabilities import COMMON_FEATURES, SCENE_CODES
 import pytest
 
+from homeassistant.components.govee_light_local.const import DOMAIN
 from homeassistant.components.govee_light_local.coordinator import (
     GoveeController,
     GoveeLocalApiCoordinator,
 )
+from homeassistant.core import HomeAssistant
+
+from tests.common import MockConfigEntry
 
 
 def set_mocked_devices(mock_govee_api: AsyncMock, devices: list[GoveeDevice]) -> None:
@@ -98,7 +102,16 @@ def fixture_mock_govee_api() -> Generator[AsyncMock]:
     mock_api.get_device_by_ip = MagicMock()
     mock_api.get_device_by_sku = MagicMock()
     mock_api.get_device_by_fingerprint = MagicMock()
-    mock_api.set_discovery_enabled = MagicMock()
+    # Mirror the controller's discovery flag so the coordinator sees a real
+    # bool, the way ``GoveeController.discovery`` behaves.
+    discovery_enabled = False
+
+    def _set_discovery_enabled(enabled: bool) -> None:
+        nonlocal discovery_enabled
+        discovery_enabled = enabled
+
+    mock_api.set_discovery_enabled = MagicMock(side_effect=_set_discovery_enabled)
+    type(mock_api).discovery = PropertyMock(side_effect=lambda: discovery_enabled)
 
     type(mock_api).devices = PropertyMock(return_value=[])
 
@@ -134,3 +147,37 @@ SCENE_CAPABILITIES: GoveeLightCapabilities = GoveeLightCapabilities(
     segments=[],
     scenes=SCENE_CODES,
 )
+
+
+async def setup_light(
+    hass: HomeAssistant,
+    mock_govee_api: AsyncMock,
+    capabilities: GoveeLightCapabilities = DEFAULT_CAPABILITIES,
+    *,
+    ip: str = "192.168.1.100",
+    fingerprint: str = "asdawdqwdqwd",
+    sku: str = "H615A",
+) -> tuple[MockConfigEntry, GoveeDevice]:
+    """Set up a single mocked Govee light device and return its entry and device.
+
+    The returned tuple lets tests that need to mutate the device after setup
+    (e.g. ``device.update(...)`` in availability tests) access the underlying
+    ``GoveeDevice`` directly. Tests that only need the entry or neither can
+    discard the unused half with ``_``.
+    """
+    device = GoveeDevice(
+        controller=mock_govee_api,
+        ip=ip,
+        fingerprint=fingerprint,
+        sku=sku,
+        capabilities=capabilities,
+    )
+    set_mocked_devices(mock_govee_api, [device])
+
+    entry = MockConfigEntry(domain=DOMAIN)
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    return entry, device

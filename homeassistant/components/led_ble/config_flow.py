@@ -1,9 +1,7 @@
 """Config flow for LEDBLE integration."""
 
-from __future__ import annotations
-
 import logging
-from typing import Any
+from typing import Any, override
 
 from bluetooth_data_tools import human_readable_name
 from led_ble import BLEAK_EXCEPTIONS, LEDBLE, CharacteristicMissingError
@@ -31,6 +29,7 @@ class LedBleConfigFlow(ConfigFlow, domain=DOMAIN):
         self._discovery_info: BluetoothServiceInfoBleak | None = None
         self._discovered_devices: dict[str, BluetoothServiceInfoBleak] = {}
 
+    @override
     async def async_step_bluetooth(
         self, discovery_info: BluetoothServiceInfoBleak
     ) -> ConfigFlowResult:
@@ -49,6 +48,7 @@ class LedBleConfigFlow(ConfigFlow, domain=DOMAIN):
         }
         return await self.async_step_user()
 
+    @override
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -85,7 +85,7 @@ class LedBleConfigFlow(ConfigFlow, domain=DOMAIN):
         if discovery := self._discovery_info:
             self._discovered_devices[discovery.address] = discovery
         else:
-            current_addresses = self._async_current_ids()
+            current_addresses = self._async_current_ids(include_ignore=False)
             for discovery in async_discovered_service_info(self.hass):
                 if (
                     discovery.address in current_addresses

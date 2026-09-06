@@ -1,7 +1,5 @@
 """The OneDrive integration."""
 
-from __future__ import annotations
-
 from collections.abc import Awaitable, Callable
 from html import unescape
 from json import dumps, loads
@@ -14,11 +12,15 @@ from onedrive_personal_sdk.exceptions import (
     NotFoundError,
     OneDriveException,
 )
-from onedrive_personal_sdk.models.items import Item, ItemUpdate
 
 from homeassistant.const import CONF_ACCESS_TOKEN, Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.exceptions import (
+    ConfigEntryAuthFailed,
+    ConfigEntryNotReady,
+    OAuth2TokenRequestError,
+    OAuth2TokenRequestReauthError,
+)
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.config_entry_oauth2_flow import (
@@ -71,15 +73,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: OneDriveConfigEntry) -> 
             entry, data={**entry.data, CONF_FOLDER_ID: backup_folder.id}
         )
 
-    # write instance id to description
-    if backup_folder.description != (instance_id := await async_get_instance_id(hass)):
-        await _handle_item_operation(
-            lambda: client.update_drive_item(
-                backup_folder.id, ItemUpdate(description=instance_id)
-            ),
-            folder_name,
-        )
-
     # update in case folder was renamed manually inside OneDrive
     if backup_folder.name != entry.data[CONF_FOLDER_NAME]:
         hass.config_entries.async_update_entry(
@@ -121,7 +114,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: OneDriveConfigEntry) ->
 
 
 async def _migrate_backup_files(client: OneDriveClient, backup_folder_id: str) -> None:
-    """Migrate backup files to metadata version 2."""
+    """Migrate backup files from metadata version 1 to version 2.
+
+    Version 1: Backup metadata was stored in the backup file's description field.
+    Version 2: Backup metadata is stored in a separate .metadata.json file.
+    """
     files = await client.list_drive_items(backup_folder_id)
     for file in files:
         if file.description and '"metadata_version": 1' in (
@@ -130,32 +127,16 @@ async def _migrate_backup_files(client: OneDriveClient, backup_folder_id: str) -
             metadata = loads(metadata_json)
             del metadata["metadata_version"]
             metadata_filename = file.name.rsplit(".", 1)[0] + ".metadata.json"
-            metadata_file = await client.upload_file(
+            await client.upload_file(
                 backup_folder_id,
                 metadata_filename,
                 dumps(metadata),
-            )
-            metadata_description = {
-                "metadata_version": 2,
-                "backup_id": metadata["backup_id"],
-                "backup_file_id": file.id,
-            }
-            await client.update_drive_item(
-                path_or_id=metadata_file.id,
-                data=ItemUpdate(description=dumps(metadata_description)),
-            )
-            await client.update_drive_item(
-                path_or_id=file.id,
-                data=ItemUpdate(description=""),
             )
             _LOGGER.debug("Migrated backup file %s", file.name)
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: OneDriveConfigEntry) -> bool:
     """Migrate old entry."""
-    if entry.version > 1:
-        # This means the user has downgraded from a future version
-        return False
 
     if (version := entry.version) == 1 and (minor_version := entry.minor_version) == 1:
         _LOGGER.debug(
@@ -192,6 +173,18 @@ async def _get_onedrive_client(
     implementation = await async_get_config_entry_implementation(hass, entry)
     session = OAuth2Session(hass, entry, implementation)
 
+    # Refresh up front, so a failure surfaces here instead of from inside the client
+    try:
+        await session.async_ensure_token_valid()
+    except OAuth2TokenRequestReauthError as err:
+        raise ConfigEntryAuthFailed(
+            translation_domain=DOMAIN, translation_key="authentication_failed"
+        ) from err
+    except OAuth2TokenRequestError as err:
+        raise ConfigEntryNotReady(
+            translation_domain=DOMAIN, translation_key="connection_error"
+        ) from err
+
     async def get_access_token() -> str:
         await session.async_ensure_token_valid()
         return cast(str, session.token[CONF_ACCESS_TOKEN])
@@ -202,9 +195,7 @@ async def _get_onedrive_client(
     )
 
 
-async def _handle_item_operation(
-    func: Callable[[], Awaitable[Item]], folder: str
-) -> Item:
+async def _handle_item_operation[T](func: Callable[[], Awaitable[T]], folder: str) -> T:
     try:
         return await func()
     except NotFoundError:

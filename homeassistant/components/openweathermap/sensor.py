@@ -1,6 +1,6 @@
 """Support for the OpenWeatherMap (OWM) service."""
 
-from __future__ import annotations
+from typing import override
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -9,12 +9,12 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.const import (
-    CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
     DEGREE,
-    PERCENTAGE,
     UV_INDEX,
+    UnitOfDensity,
     UnitOfLength,
     UnitOfPressure,
+    UnitOfRatio,
     UnitOfSpeed,
     UnitOfTemperature,
     UnitOfVolumetricFlux,
@@ -64,108 +64,105 @@ from .coordinator import OWMUpdateCoordinator
 WEATHER_SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
     SensorEntityDescription(
         key=ATTR_API_WEATHER,
-        name="Weather",
+        translation_key=ATTR_API_WEATHER,
     ),
     SensorEntityDescription(
         key=ATTR_API_DEW_POINT,
-        name="Dew Point",
+        translation_key=ATTR_API_DEW_POINT,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     SensorEntityDescription(
         key=ATTR_API_TEMPERATURE,
-        name="Temperature",
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     SensorEntityDescription(
         key=ATTR_API_FEELS_LIKE_TEMPERATURE,
-        name="Feels like temperature",
+        translation_key=ATTR_API_FEELS_LIKE_TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     SensorEntityDescription(
         key=ATTR_API_WIND_SPEED,
-        name="Wind speed",
         native_unit_of_measurement=UnitOfSpeed.METERS_PER_SECOND,
         device_class=SensorDeviceClass.WIND_SPEED,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     SensorEntityDescription(
         key=ATTR_API_WIND_GUST,
-        name="Wind gust",
+        translation_key=ATTR_API_WIND_GUST,
         native_unit_of_measurement=UnitOfSpeed.METERS_PER_SECOND,
         device_class=SensorDeviceClass.WIND_SPEED,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     SensorEntityDescription(
         key=ATTR_API_WIND_BEARING,
-        name="Wind bearing",
         native_unit_of_measurement=DEGREE,
         state_class=SensorStateClass.MEASUREMENT_ANGLE,
         device_class=SensorDeviceClass.WIND_DIRECTION,
     ),
     SensorEntityDescription(
         key=ATTR_API_HUMIDITY,
-        name="Humidity",
-        native_unit_of_measurement=PERCENTAGE,
+        native_unit_of_measurement=UnitOfRatio.PERCENTAGE,
         device_class=SensorDeviceClass.HUMIDITY,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     SensorEntityDescription(
         key=ATTR_API_PRESSURE,
-        name="Pressure",
         native_unit_of_measurement=UnitOfPressure.HPA,
         device_class=SensorDeviceClass.PRESSURE,
         state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
     ),
     SensorEntityDescription(
         key=ATTR_API_CLOUDS,
-        name="Cloud coverage",
-        native_unit_of_measurement=PERCENTAGE,
+        translation_key=ATTR_API_CLOUDS,
+        native_unit_of_measurement=UnitOfRatio.PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     SensorEntityDescription(
         key=ATTR_API_RAIN,
-        name="Rain",
+        translation_key=ATTR_API_RAIN,
         native_unit_of_measurement=UnitOfVolumetricFlux.MILLIMETERS_PER_HOUR,
         device_class=SensorDeviceClass.PRECIPITATION_INTENSITY,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     SensorEntityDescription(
         key=ATTR_API_SNOW,
-        name="Snow",
+        translation_key=ATTR_API_SNOW,
         native_unit_of_measurement=UnitOfVolumetricFlux.MILLIMETERS_PER_HOUR,
         device_class=SensorDeviceClass.PRECIPITATION_INTENSITY,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     SensorEntityDescription(
         key=ATTR_API_PRECIPITATION_KIND,
-        name="Precipitation kind",
+        translation_key=ATTR_API_PRECIPITATION_KIND,
     ),
     SensorEntityDescription(
         key=ATTR_API_UV_INDEX,
-        name="UV Index",
+        translation_key=ATTR_API_UV_INDEX,
         native_unit_of_measurement=UV_INDEX,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     SensorEntityDescription(
         key=ATTR_API_VISIBILITY_DISTANCE,
-        name="Visibility",
+        translation_key=ATTR_API_VISIBILITY_DISTANCE,
         native_unit_of_measurement=UnitOfLength.METERS,
         device_class=SensorDeviceClass.DISTANCE,
         state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
     ),
     SensorEntityDescription(
         key=ATTR_API_CONDITION,
-        name="Condition",
+        translation_key=ATTR_API_CONDITION,
     ),
     SensorEntityDescription(
         key=ATTR_API_WEATHER_CODE,
-        name="Weather Code",
+        translation_key=ATTR_API_WEATHER_CODE,
     ),
 )
 
@@ -177,43 +174,43 @@ AIRPOLLUTION_SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
     ),
     SensorEntityDescription(
         key=ATTR_API_AIRPOLLUTION_CO,
-        native_unit_of_measurement=CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        native_unit_of_measurement=UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
         device_class=SensorDeviceClass.CO,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     SensorEntityDescription(
         key=ATTR_API_AIRPOLLUTION_NO,
-        native_unit_of_measurement=CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        native_unit_of_measurement=UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
         device_class=SensorDeviceClass.NITROGEN_MONOXIDE,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     SensorEntityDescription(
         key=ATTR_API_AIRPOLLUTION_NO2,
-        native_unit_of_measurement=CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        native_unit_of_measurement=UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
         device_class=SensorDeviceClass.NITROGEN_DIOXIDE,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     SensorEntityDescription(
         key=ATTR_API_AIRPOLLUTION_O3,
-        native_unit_of_measurement=CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        native_unit_of_measurement=UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
         device_class=SensorDeviceClass.OZONE,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     SensorEntityDescription(
         key=ATTR_API_AIRPOLLUTION_SO2,
-        native_unit_of_measurement=CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        native_unit_of_measurement=UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
         device_class=SensorDeviceClass.SULPHUR_DIOXIDE,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     SensorEntityDescription(
         key=ATTR_API_AIRPOLLUTION_PM2_5,
-        native_unit_of_measurement=CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        native_unit_of_measurement=UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
         device_class=SensorDeviceClass.PM25,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     SensorEntityDescription(
         key=ATTR_API_AIRPOLLUTION_PM10,
-        native_unit_of_measurement=CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        native_unit_of_measurement=UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
         device_class=SensorDeviceClass.PM10,
         state_class=SensorStateClass.MEASUREMENT,
     ),
@@ -227,7 +224,6 @@ async def async_setup_entry(
 ) -> None:
     """Set up OpenWeatherMap sensor entities based on a config entry."""
     domain_data = config_entry.runtime_data
-    name = domain_data.name
     unique_id = config_entry.unique_id
     assert unique_id is not None
     coordinator = domain_data.coordinator
@@ -242,7 +238,6 @@ async def async_setup_entry(
     elif domain_data.mode == OWM_MODE_AIRPOLLUTION:
         async_add_entities(
             OpenWeatherMapSensor(
-                name,
                 unique_id,
                 description,
                 coordinator,
@@ -252,7 +247,6 @@ async def async_setup_entry(
     else:
         async_add_entities(
             OpenWeatherMapSensor(
-                name,
                 unique_id,
                 description,
                 coordinator,
@@ -270,7 +264,6 @@ class AbstractOpenWeatherMapSensor(SensorEntity):
 
     def __init__(
         self,
-        name: str,
         unique_id: str,
         description: SensorEntityDescription,
         coordinator: OWMUpdateCoordinator,
@@ -284,14 +277,15 @@ class AbstractOpenWeatherMapSensor(SensorEntity):
             entry_type=DeviceEntryType.SERVICE,
             identifiers={(DOMAIN, unique_id)},
             manufacturer=MANUFACTURER,
-            name=name,
         )
 
     @property
+    @override
     def available(self) -> bool:
         """Return True if entity is available."""
         return self._coordinator.last_update_success
 
+    @override
     async def async_added_to_hass(self) -> None:
         """Connect to dispatcher listening for entity data notifications."""
         self.async_on_remove(
@@ -307,6 +301,7 @@ class OpenWeatherMapSensor(AbstractOpenWeatherMapSensor):
     """Implementation of an OpenWeatherMap sensor."""
 
     @property
+    @override
     def native_value(self) -> StateType:
         """Return the state of the device."""
         return self._coordinator.data[ATTR_API_CURRENT].get(self.entity_description.key)

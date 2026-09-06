@@ -26,13 +26,14 @@ async def test_diagnostics(
     snapshot: SnapshotAssertion,
 ) -> None:
     """Test diagnostics."""
-    (connection_factory, transport, protocol) = dsmr_connection_fixture
+    (connection_factory, _transport, _protocol) = dsmr_connection_fixture
 
     entry_data = {
         "port": "/dev/ttyUSB0",
         "dsmr_version": "2.2",
         "serial_id": "1234",
         "serial_id_gas": "5678",
+        "encryption_key": "aabbccddeeff00112233445566778899",
     }
     entry_options = {
         "time_between_update": 0,

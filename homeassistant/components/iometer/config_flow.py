@@ -1,8 +1,13 @@
 """Config flow for the IOmeter integration."""
 
-from typing import Any, Final
+from typing import Any, Final, override
 
-from iometer import IOmeterClient, IOmeterConnectionError
+from iometer import (
+    IOmeterClient,
+    IOmeterConnectionError,
+    IOmeterNoStatusError,
+    IOmeterTimeoutError,
+)
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
@@ -23,6 +28,7 @@ class IOMeterConfigFlow(ConfigFlow, domain=DOMAIN):
         self._host: str
         self._meter_number: str
 
+    @override
     async def async_step_zeroconf(
         self, discovery_info: ZeroconfServiceInfo
     ) -> ConfigFlowResult:
@@ -34,14 +40,17 @@ class IOMeterConfigFlow(ConfigFlow, domain=DOMAIN):
         client = IOmeterClient(host=host, session=session)
         try:
             status = await client.get_current_status()
-        except IOmeterConnectionError:
+        except IOmeterNoStatusError:
+            return self.async_abort(reason="no_status")
+        except IOmeterTimeoutError, IOmeterConnectionError:
             return self.async_abort(reason="cannot_connect")
 
-        self._meter_number = status.meter.number
+        if not status.meter:
+            return self.async_abort(reason="no_readings")
 
+        self._meter_number = status.meter.number
         await self.async_set_unique_id(status.device.id)
         self._abort_if_unique_id_configured()
-
         self.context["title_placeholders"] = {"name": f"IOmeter {self._meter_number}"}
         return await self.async_step_zeroconf_confirm()
 
@@ -58,6 +67,7 @@ class IOMeterConfigFlow(ConfigFlow, domain=DOMAIN):
             description_placeholders={"meter_number": self._meter_number},
         )
 
+    @override
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -70,13 +80,19 @@ class IOMeterConfigFlow(ConfigFlow, domain=DOMAIN):
             client = IOmeterClient(host=self._host, session=session)
             try:
                 status = await client.get_current_status()
-            except IOmeterConnectionError:
+            except IOmeterNoStatusError:
+                errors["base"] = "no_status"
+            except IOmeterTimeoutError, IOmeterConnectionError:
                 errors["base"] = "cannot_connect"
             else:
-                self._meter_number = status.meter.number
-                await self.async_set_unique_id(status.device.id)
-                self._abort_if_unique_id_configured()
-                return await self._async_create_entry()
+                if not status.meter:
+                    errors["base"] = "no_readings"
+                else:
+                    self._meter_number = status.meter.number
+                    await self.async_set_unique_id(status.device.id)
+                    self._abort_if_unique_id_configured()
+                    return await self._async_create_entry()
+
         return self.async_show_form(
             step_id="user",
             data_schema=CONFIG_SCHEMA,

@@ -1,7 +1,5 @@
 """Provides device conditions for sensors."""
 
-from __future__ import annotations
-
 import voluptuous as vol
 
 from homeassistant.components.device_automation import (
@@ -29,7 +27,7 @@ from homeassistant.helpers.entity import (
 )
 from homeassistant.helpers.typing import ConfigType
 
-from . import ATTR_STATE_CLASS, DOMAIN, SensorDeviceClass
+from . import DOMAIN, SensorDeviceClass, SensorEntityCapabilityAttribute
 
 DEVICE_CLASS_NONE = "none"
 
@@ -65,11 +63,13 @@ CONF_IS_PH = "is_ph"
 CONF_IS_PM1 = "is_pm1"
 CONF_IS_PM10 = "is_pm10"
 CONF_IS_PM25 = "is_pm25"
+CONF_IS_PM4 = "is_pm4"
 CONF_IS_POWER = "is_power"
 CONF_IS_POWER_FACTOR = "is_power_factor"
 CONF_IS_PRECIPITATION = "is_precipitation"
 CONF_IS_PRECIPITATION_INTENSITY = "is_precipitation_intensity"
 CONF_IS_PRESSURE = "is_pressure"
+CONF_IS_RADON = "is_radon"
 CONF_IS_SPEED = "is_speed"
 CONF_IS_REACTIVE_ENERGY = "is_reactive_energy"
 CONF_IS_REACTIVE_POWER = "is_reactive_power"
@@ -77,6 +77,7 @@ CONF_IS_SIGNAL_STRENGTH = "is_signal_strength"
 CONF_IS_SOUND_PRESSURE = "is_sound_pressure"
 CONF_IS_SULPHUR_DIOXIDE = "is_sulphur_dioxide"
 CONF_IS_TEMPERATURE = "is_temperature"
+CONF_IS_TEMPERATURE_DELTA = "is_temperature_delta"
 CONF_IS_VALUE = "is_value"
 CONF_IS_VOLATILE_ORGANIC_COMPOUNDS = "is_volatile_organic_compounds"
 CONF_IS_VOLATILE_ORGANIC_COMPOUNDS_PARTS = "is_volatile_organic_compounds_parts"
@@ -126,11 +127,13 @@ ENTITY_CONDITIONS = {
     SensorDeviceClass.PM1: [{CONF_TYPE: CONF_IS_PM1}],
     SensorDeviceClass.PM10: [{CONF_TYPE: CONF_IS_PM10}],
     SensorDeviceClass.PM25: [{CONF_TYPE: CONF_IS_PM25}],
+    SensorDeviceClass.PM4: [{CONF_TYPE: CONF_IS_PM4}],
     SensorDeviceClass.PRECIPITATION: [{CONF_TYPE: CONF_IS_PRECIPITATION}],
     SensorDeviceClass.PRECIPITATION_INTENSITY: [
         {CONF_TYPE: CONF_IS_PRECIPITATION_INTENSITY}
     ],
     SensorDeviceClass.PRESSURE: [{CONF_TYPE: CONF_IS_PRESSURE}],
+    SensorDeviceClass.RADON: [{CONF_TYPE: CONF_IS_RADON}],
     SensorDeviceClass.REACTIVE_ENERGY: [{CONF_TYPE: CONF_IS_REACTIVE_ENERGY}],
     SensorDeviceClass.REACTIVE_POWER: [{CONF_TYPE: CONF_IS_REACTIVE_POWER}],
     SensorDeviceClass.SIGNAL_STRENGTH: [{CONF_TYPE: CONF_IS_SIGNAL_STRENGTH}],
@@ -138,6 +141,7 @@ ENTITY_CONDITIONS = {
     SensorDeviceClass.SPEED: [{CONF_TYPE: CONF_IS_SPEED}],
     SensorDeviceClass.SULPHUR_DIOXIDE: [{CONF_TYPE: CONF_IS_SULPHUR_DIOXIDE}],
     SensorDeviceClass.TEMPERATURE: [{CONF_TYPE: CONF_IS_TEMPERATURE}],
+    SensorDeviceClass.TEMPERATURE_DELTA: [{CONF_TYPE: CONF_IS_TEMPERATURE_DELTA}],
     SensorDeviceClass.VOLATILE_ORGANIC_COMPOUNDS: [
         {CONF_TYPE: CONF_IS_VOLATILE_ORGANIC_COMPOUNDS}
     ],
@@ -195,9 +199,11 @@ CONDITION_SCHEMA = vol.All(
                     CONF_IS_PM1,
                     CONF_IS_PM10,
                     CONF_IS_PM25,
+                    CONF_IS_PM4,
                     CONF_IS_PRECIPITATION,
                     CONF_IS_PRECIPITATION_INTENSITY,
                     CONF_IS_PRESSURE,
+                    CONF_IS_RADON,
                     CONF_IS_REACTIVE_ENERGY,
                     CONF_IS_REACTIVE_POWER,
                     CONF_IS_SIGNAL_STRENGTH,
@@ -205,6 +211,7 @@ CONDITION_SCHEMA = vol.All(
                     CONF_IS_SPEED,
                     CONF_IS_SULPHUR_DIOXIDE,
                     CONF_IS_TEMPERATURE,
+                    CONF_IS_TEMPERATURE_DELTA,
                     CONF_IS_VOLATILE_ORGANIC_COMPOUNDS,
                     CONF_IS_VOLATILE_ORGANIC_COMPOUNDS_PARTS,
                     CONF_IS_VOLTAGE,
@@ -239,7 +246,9 @@ async def async_get_conditions(
 
     for entry in entries:
         device_class = get_device_class(hass, entry.entity_id) or DEVICE_CLASS_NONE
-        state_class = get_capability(hass, entry.entity_id, ATTR_STATE_CLASS)
+        state_class = get_capability(
+            hass, entry.entity_id, SensorEntityCapabilityAttribute.STATE_CLASS
+        )
         unit_of_measurement = get_unit_of_measurement(hass, entry.entity_id)
 
         if not unit_of_measurement and not state_class:

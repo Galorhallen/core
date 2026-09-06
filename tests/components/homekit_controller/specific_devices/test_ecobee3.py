@@ -31,10 +31,11 @@ from ..common import (
 async def test_ecobee3_setup(hass: HomeAssistant) -> None:
     """Test that a Ecbobee 3 can be correctly setup in HA."""
     accessories = await setup_accessories_from_file(hass, "ecobee3.json")
-    await setup_test_accessories(hass, accessories)
+    config_entry, _ = await setup_test_accessories(hass, accessories)
 
     await assert_devices_and_entities_created(
         hass,
+        config_entry.entry_id,
         DeviceTestInfo(
             unique_id=HUB_TEST_ACCESSORY_ID,
             name="HomeW",
@@ -190,7 +191,7 @@ async def test_ecobee3_setup_connection_failure(
 
         # If there is no cached entity map and the accessory connection is
         # failing then we have to fail the config entry setup.
-        config_entry, pairing = await setup_test_accessories(hass, accessories)
+        config_entry, _pairing = await setup_test_accessories(hass, accessories)
         assert config_entry.state is ConfigEntryState.SETUP_RETRY
 
     climate = entity_registry.async_get("climate.homew")

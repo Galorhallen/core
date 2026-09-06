@@ -1,15 +1,14 @@
 """Support for Synology DSM switch."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any, override
 
 from synology_dsm.api.surveillance_station import SynoSurveillanceStation
 
 from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
@@ -45,7 +44,8 @@ async def async_setup_entry(
     """Set up the Synology NAS switch."""
     data = entry.runtime_data
     if coordinator := data.coordinator_switches:
-        assert coordinator.version is not None
+        if TYPE_CHECKING:
+            assert coordinator.version is not None
         async_add_entities(
             SynoDSMSurveillanceHomeModeToggle(
                 data.api, coordinator.version, coordinator, description
@@ -73,14 +73,17 @@ class SynoDSMSurveillanceHomeModeToggle(
         self._version = version
 
     @property
+    @override
     def is_on(self) -> bool:
         """Return the state."""
         return self.coordinator.data["switches"][self.entity_description.key]  # type: ignore[no-any-return]
 
+    @override
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn on Home mode."""
-        assert self._api.surveillance_station is not None
-        assert self._api.information
+        if TYPE_CHECKING:
+            assert self._api.surveillance_station is not None
+            assert self._api.information
         _LOGGER.debug(
             "SynoDSMSurveillanceHomeModeToggle.turn_on(%s)",
             self._api.information.serial,
@@ -88,10 +91,12 @@ class SynoDSMSurveillanceHomeModeToggle(
         await self._api.dsm.surveillance_station.set_home_mode(True)
         await self.coordinator.async_request_refresh()
 
+    @override
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn off Home mode."""
-        assert self._api.surveillance_station is not None
-        assert self._api.information
+        if TYPE_CHECKING:
+            assert self._api.surveillance_station is not None
+            assert self._api.information
         _LOGGER.debug(
             "SynoDSMSurveillanceHomeModeToggle.turn_off(%s)",
             self._api.information.serial,
@@ -100,16 +105,19 @@ class SynoDSMSurveillanceHomeModeToggle(
         await self.coordinator.async_request_refresh()
 
     @property
+    @override
     def available(self) -> bool:
         """Return True if entity is available."""
         return bool(self._api.surveillance_station) and super().available
 
     @property
+    @override
     def device_info(self) -> DeviceInfo:
         """Return the device information."""
-        assert self._api.surveillance_station is not None
-        assert self._api.information is not None
-        assert self._api.network is not None
+        if TYPE_CHECKING:
+            assert self._api.surveillance_station is not None
+            assert self._api.information is not None
+            assert self._api.network is not None
         return DeviceInfo(
             identifiers={
                 (
@@ -121,5 +129,9 @@ class SynoDSMSurveillanceHomeModeToggle(
             manufacturer="Synology",
             model=self._api.information.model,
             sw_version=self._version,
-            via_device=(DOMAIN, self._api.information.serial),
+            via_device_id=dr.async_get_device_id_by_identifier(
+                self.hass,
+                (DOMAIN, self._api.information.serial),
+                config_entry_id=self.coordinator.config_entry.entry_id,
+            ),
         )

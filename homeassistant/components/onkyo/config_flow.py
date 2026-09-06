@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 import logging
-from typing import Any
+from typing import Any, override
 
 from aioonkyo import ReceiverInfo
 import voluptuous as vol
@@ -14,7 +14,7 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
     OptionsFlowWithReload,
 )
-from homeassistant.const import CONF_HOST
+from homeassistant.const import CONF_DEVICE, CONF_HOST
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import section
 from homeassistant.helpers.selector import (
@@ -46,8 +46,6 @@ from .receiver import async_discover, async_interview
 from .util import get_meaning
 
 _LOGGER = logging.getLogger(__name__)
-
-CONF_DEVICE = "device"
 
 INPUT_SOURCES_DEFAULT: list[InputSource] = []
 LISTENING_MODES_DEFAULT: list[ListeningMode] = []
@@ -89,6 +87,7 @@ class OnkyoConfigFlow(ConfigFlow, domain=DOMAIN):
     _receiver_info: ReceiverInfo
     _discovered_infos: dict[str, ReceiverInfo]
 
+    @override
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -109,24 +108,22 @@ class OnkyoConfigFlow(ConfigFlow, domain=DOMAIN):
             _LOGGER.debug("Config flow manual: %s", host)
             try:
                 info = await async_interview(host)
+            except TimeoutError:
+                _LOGGER.warning("Timed out interviewing: %s", host)
+                errors["base"] = "cannot_connect"
             except OSError:
-                _LOGGER.exception("Unexpected exception")
+                _LOGGER.exception("Unexpected exception interviewing: %s", host)
                 errors["base"] = "unknown"
             else:
-                if info is None:
-                    errors["base"] = "cannot_connect"
+                self._receiver_info = info
+
+                await self.async_set_unique_id(info.identifier, raise_on_progress=False)
+                if self.source == SOURCE_RECONFIGURE:
+                    self._abort_if_unique_id_mismatch()
                 else:
-                    self._receiver_info = info
+                    self._abort_if_unique_id_configured()
 
-                    await self.async_set_unique_id(
-                        info.identifier, raise_on_progress=False
-                    )
-                    if self.source == SOURCE_RECONFIGURE:
-                        self._abort_if_unique_id_mismatch()
-                    else:
-                        self._abort_if_unique_id_configured()
-
-                    return await self.async_step_configure_receiver()
+                return await self.async_step_configure_receiver()
 
         suggested_values = user_input
         if suggested_values is None and self.source == SOURCE_RECONFIGURE:
@@ -168,7 +165,7 @@ class OnkyoConfigFlow(ConfigFlow, domain=DOMAIN):
 
         self._discovered_infos = {}
         discovered_names = {}
-        current_unique_ids = self._async_current_ids()
+        current_unique_ids = self._async_current_ids(include_ignore=False)
         for info in infos:
             if info.identifier in current_unique_ids:
                 continue
@@ -188,6 +185,7 @@ class OnkyoConfigFlow(ConfigFlow, domain=DOMAIN):
             ),
         )
 
+    @override
     async def async_step_ssdp(
         self, discovery_info: SsdpServiceInfo
     ) -> ConfigFlowResult:
@@ -214,13 +212,12 @@ class OnkyoConfigFlow(ConfigFlow, domain=DOMAIN):
 
         try:
             info = await async_interview(host)
-        except OSError:
-            _LOGGER.exception("Unexpected exception interviewing host %s", host)
-            return self.async_abort(reason="unknown")
-
-        if info is None:
-            _LOGGER.debug("SSDP eiscp is None: %s", host)
+        except TimeoutError:
+            _LOGGER.info("Timed out interviewing: %s", host)
             return self.async_abort(reason="cannot_connect")
+        except OSError:
+            _LOGGER.exception("Unexpected exception interviewing: %s", host)
+            return self.async_abort(reason="unknown")
 
         await self.async_set_unique_id(info.identifier)
         self._abort_if_unique_id_configured(updates={CONF_HOST: info.host})
@@ -339,6 +336,7 @@ class OnkyoConfigFlow(ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     @callback
+    @override
     def async_get_options_flow(config_entry: OnkyoConfigEntry) -> OptionsFlowWithReload:
         """Return the options flow."""
         return OnkyoOptionsFlowHandler()

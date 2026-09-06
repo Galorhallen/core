@@ -1,7 +1,9 @@
 """The Homee select platform."""
 
+from typing import override
+
 from pyHomee.const import AttributeType
-from pyHomee.model import HomeeAttribute
+from pyHomee.model import HomeeAttribute, HomeeNode
 
 from homeassistant.components.select import SelectEntity, SelectEntityDescription
 from homeassistant.const import EntityCategory
@@ -10,6 +12,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import HomeeConfigEntry
 from .entity import HomeeEntity
+from .helpers import setup_homee_platform
 
 PARALLEL_UPDATES = 0
 
@@ -27,18 +30,30 @@ SELECT_DESCRIPTIONS: dict[AttributeType, SelectEntityDescription] = {
 }
 
 
+async def add_select_entities(
+    hass: HomeAssistant,
+    config_entry: HomeeConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+    nodes: list[HomeeNode],
+) -> None:
+    """Add homee select entities."""
+    async_add_entities(
+        HomeeSelect(hass, attribute, config_entry, SELECT_DESCRIPTIONS[attribute.type])
+        for node in nodes
+        for attribute in node.attributes
+        if attribute.type in SELECT_DESCRIPTIONS and attribute.editable
+    )
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: HomeeConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Add the Homee platform for the select component."""
+    """Add the homee platform for the select component."""
 
-    async_add_entities(
-        HomeeSelect(attribute, config_entry, SELECT_DESCRIPTIONS[attribute.type])
-        for node in config_entry.runtime_data.nodes
-        for attribute in node.attributes
-        if attribute.type in SELECT_DESCRIPTIONS and attribute.editable
+    await setup_homee_platform(
+        hass, add_select_entities, async_add_entities, config_entry
     )
 
 
@@ -47,22 +62,25 @@ class HomeeSelect(HomeeEntity, SelectEntity):
 
     def __init__(
         self,
+        hass: HomeAssistant,
         attribute: HomeeAttribute,
         entry: HomeeConfigEntry,
         description: SelectEntityDescription,
     ) -> None:
         """Initialize a Homee select entity."""
-        super().__init__(attribute, entry)
+        super().__init__(hass, attribute, entry)
         self.entity_description = description
         assert description.options is not None
         self._attr_options = description.options
         self._attr_translation_key = description.key
 
     @property
+    @override
     def current_option(self) -> str:
         """Return the current selected option."""
         return self.options[int(self._attribute.current_value)]
 
+    @override
     async def async_select_option(self, option: str) -> None:
         """Change the selected option."""
         await self.async_set_homee_value(self.options.index(option))

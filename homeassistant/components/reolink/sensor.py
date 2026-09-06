@@ -1,13 +1,13 @@
 """Component providing support for Reolink sensors."""
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
+from typing import override
 
 from reolink_aio.api import Host
+from reolink_aio.const import YOLO_DETECT_TYPES
 from reolink_aio.enums import BatteryEnum
 
 from homeassistant.components.sensor import (
@@ -60,6 +60,7 @@ class ReolinkHostSensorEntityDescription(
 SENSORS = (
     ReolinkSensorEntityDescription(
         key="ptz_pan_position",
+        cmd_id=433,
         cmd_key="GetPtzCurPos",
         translation_key="ptz_pan_position",
         state_class=SensorStateClass.MEASUREMENT,
@@ -69,6 +70,7 @@ SENSORS = (
     ),
     ReolinkSensorEntityDescription(
         key="ptz_tilt_position",
+        cmd_id=433,
         cmd_key="GetPtzCurPos",
         translation_key="ptz_tilt_position",
         state_class=SensorStateClass.MEASUREMENT,
@@ -135,11 +137,45 @@ SENSORS = (
         value=lambda api, ch: api.wifi_signal(ch),
         supported=lambda api, ch: api.supported(ch, "wifi"),
     ),
+    ReolinkSensorEntityDescription(
+        key="person_type",
+        cmd_id=696,
+        translation_key="person_type",
+        device_class=SensorDeviceClass.ENUM,
+        options=YOLO_DETECT_TYPES["people"],
+        value=lambda api, ch: api.baichuan.ai_detect_type(ch, "person"),
+        supported=lambda api, ch: (
+            api.supported(ch, "ai_yolo_type") and api.supported(ch, "ai_people")
+        ),
+    ),
+    ReolinkSensorEntityDescription(
+        key="vehicle_type",
+        cmd_id=696,
+        translation_key="vehicle_type",
+        device_class=SensorDeviceClass.ENUM,
+        options=YOLO_DETECT_TYPES["vehicle"],
+        value=lambda api, ch: api.baichuan.ai_detect_type(ch, "vehicle"),
+        supported=lambda api, ch: (
+            api.supported(ch, "ai_yolo_type") and api.supported(ch, "ai_vehicle")
+        ),
+    ),
+    ReolinkSensorEntityDescription(
+        key="animal_type",
+        cmd_id=696,
+        translation_key="animal_type",
+        device_class=SensorDeviceClass.ENUM,
+        options=YOLO_DETECT_TYPES["dog_cat"],
+        value=lambda api, ch: api.baichuan.ai_detect_type(ch, "dog_cat"),
+        supported=lambda api, ch: (
+            api.supported(ch, "ai_yolo_type") and api.supported(ch, "ai_dog_cat")
+        ),
+    ),
 )
 
 HOST_SENSORS = (
     ReolinkHostSensorEntityDescription(
         key="wifi_signal",
+        cmd_id=464,
         cmd_key="115",
         translation_key="wifi_signal",
         device_class=SensorDeviceClass.SIGNAL_STRENGTH,
@@ -190,7 +226,7 @@ async def async_setup_entry(
     ] = [
         ReolinkSensorEntity(reolink_data, channel, entity_description)
         for entity_description in SENSORS
-        for channel in reolink_data.host.api.channels
+        for channel in reolink_data.host.api.stream_channels
         if entity_description.supported(reolink_data.host.api, channel)
     ]
     entities.extend(
@@ -223,6 +259,7 @@ class ReolinkSensorEntity(ReolinkChannelCoordinatorEntity, SensorEntity):
         super().__init__(reolink_data, channel)
 
     @property
+    @override
     def native_value(self) -> StateType | date | datetime | Decimal:
         """Return the value reported by the sensor."""
         return self.entity_description.value(self._host.api, self._channel)
@@ -243,13 +280,14 @@ class ReolinkHostSensorEntity(ReolinkHostCoordinatorEntity, SensorEntity):
         super().__init__(reolink_data)
 
     @property
+    @override
     def native_value(self) -> StateType | date | datetime | Decimal:
         """Return the value reported by the sensor."""
         return self.entity_description.value(self._host.api)
 
 
 class ReolinkHddSensorEntity(ReolinkHostCoordinatorEntity, SensorEntity):
-    """Base sensor class for Reolink host sensors."""
+    """Base sensor class for Reolink storage device sensors."""
 
     entity_description: ReolinkSensorEntityDescription
 
@@ -259,7 +297,7 @@ class ReolinkHddSensorEntity(ReolinkHostCoordinatorEntity, SensorEntity):
         hdd_index: int,
         entity_description: ReolinkSensorEntityDescription,
     ) -> None:
-        """Initialize Reolink host sensor."""
+        """Initialize Reolink storage device sensor."""
         self.entity_description = entity_description
         super().__init__(reolink_data)
         self._hdd_index = hdd_index
@@ -273,11 +311,13 @@ class ReolinkHddSensorEntity(ReolinkHostCoordinatorEntity, SensorEntity):
             self._attr_translation_key = "sd_storage"
 
     @property
+    @override
     def native_value(self) -> StateType | date | datetime | Decimal:
         """Return the value reported by the sensor."""
         return self.entity_description.value(self._host.api, self._hdd_index)
 
     @property
+    @override
     def available(self) -> bool:
         """Return True if entity is available."""
         return self._host.api.hdd_available(self._hdd_index) and super().available

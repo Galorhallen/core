@@ -1,9 +1,7 @@
 """Govee light local."""
 
-from __future__ import annotations
-
 import logging
-from typing import Any
+from typing import Any, override
 
 from govee_local_api import GoveeDevice, GoveeLightFeatures
 
@@ -23,8 +21,9 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, MANUFACTURER, SIGNAL_GOVEE_DEVICE_REMOVE
+from .const import DEVICE_TIMEOUT, DOMAIN, MANUFACTURER, SIGNAL_GOVEE_DEVICE_REMOVE
 from .coordinator import GoveeLocalApiCoordinator, GoveeLocalConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
@@ -82,7 +81,6 @@ class GoveeLight(CoordinatorEntity[GoveeLocalApiCoordinator], LightEntity):
 
         super().__init__(coordinator)
         self._device = device
-        device.set_update_callback(self._update_callback)
 
         self._attr_unique_id: str = device.fingerprint
 
@@ -122,18 +120,6 @@ class GoveeLight(CoordinatorEntity[GoveeLocalApiCoordinator], LightEntity):
             serial_number=device.fingerprint,
         )
 
-    async def async_added_to_hass(self) -> None:
-        """Run when entity about to be added to hass."""
-        await super().async_added_to_hass()
-
-        self.async_on_remove(
-            async_dispatcher_connect(
-                self.hass,
-                SIGNAL_GOVEE_DEVICE_REMOVE,
-                self.async_signal_govee_device_removed,
-            )
-        )
-
     async def async_signal_govee_device_removed(self, fingerprint: str) -> None:
         """Handle device removal."""
         if self._device.fingerprint == fingerprint:
@@ -143,38 +129,58 @@ class GoveeLight(CoordinatorEntity[GoveeLocalApiCoordinator], LightEntity):
             ):
                 ent_registry.async_remove(entity_id)
 
-            if dev_registry := dr.async_get(self.hass):
-                device_identifiers = {(DOMAIN, self._device.fingerprint)}
-                if device := dev_registry.async_get_device(device_identifiers):
-                    dev_registry.async_update_device(
-                        device.id,
-                        remove_config_entry_id=self.coordinator.config_entry.entry_id,
-                    )
+            config_entry = self.coordinator.config_entry
+            if (dev_registry := dr.async_get(self.hass)) and config_entry:
+                if device := dev_registry.async_get_device_by_identifier(
+                    (DOMAIN, self._device.fingerprint), config_entry.entry_id
+                ):
+                    # A device now belongs to a single config entry, so
+                    # dropping it from this entry means deleting it outright.
+                    dev_registry.async_remove_device(device.id)
             self.coordinator.remove_device(self._device)
             await self.async_remove(force_remove=True)
 
     @property
+    @override
+    def available(self) -> bool:
+        """Return if the device is reachable.
+
+        The underlying library updates ``lastseen`` whenever the device
+        replies to a status request. The coordinator polls every
+        ``SCAN_INTERVAL``, so if we have not heard back within
+        ``DEVICE_TIMEOUT`` we consider the device offline.
+        """
+        if not super().available:
+            return False
+        return dt_util.utcnow() - self._device.lastseen < DEVICE_TIMEOUT
+
+    @property
+    @override
     def is_on(self) -> bool:
         """Return true if device is on (brightness above 0)."""
         return self._device.on
 
     @property
+    @override
     def brightness(self) -> int:
         """Return the brightness of this light between 0..255."""
         return int((self._device.brightness / 100.0) * 255.0)
 
     @property
+    @override
     def color_temp_kelvin(self) -> int | None:
         """Return the color temperature in Kelvin."""
         return self._device.temperature_color
 
     @property
+    @override
     def rgb_color(self) -> tuple[int, int, int] | None:
         """Return the rgb color."""
         return self._device.rgb_color
 
     @property
-    def color_mode(self) -> ColorMode | str | None:
+    @override
+    def color_mode(self) -> ColorMode:
         """Return the color mode."""
         if self._fixed_color_mode:
             # The light supports only a single color mode, return it
@@ -189,6 +195,7 @@ class GoveeLight(CoordinatorEntity[GoveeLocalApiCoordinator], LightEntity):
             return ColorMode.COLOR_TEMP
         return ColorMode.RGB
 
+    @override
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the device on."""
         if ATTR_BRIGHTNESS in kwargs:
@@ -223,13 +230,35 @@ class GoveeLight(CoordinatorEntity[GoveeLocalApiCoordinator], LightEntity):
 
         self.async_write_ha_state()
 
+    @override
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the device off."""
         await self.coordinator.turn_off(self._device)
         self.async_write_ha_state()
 
+    @override
+    async def async_added_to_hass(self) -> None:
+        """Register update and device removal callbacks."""
+        await super().async_added_to_hass()
+        self._device.set_update_callback(self._update_callback)
+
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                SIGNAL_GOVEE_DEVICE_REMOVE,
+                self.async_signal_govee_device_removed,
+            )
+        )
+
+    @override
+    async def async_will_remove_from_hass(self) -> None:
+        """Unregister update callback when entity is removed."""
+        self._device.set_update_callback(None)
+        await super().async_will_remove_from_hass()
+
     @callback
     def _update_callback(self, device: GoveeDevice) -> None:
+        """Handle device state updates pushed by the library."""
         self.async_write_ha_state()
 
     def _save_last_color_state(self) -> None:

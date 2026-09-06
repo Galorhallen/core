@@ -1,16 +1,18 @@
 """Support for MQTT locks."""
 
-from __future__ import annotations
-
 from collections.abc import Callable
 import logging
 import re
-from typing import Any
+from typing import Any, override
 
 import voluptuous as vol
 
 from homeassistant.components import lock
-from homeassistant.components.lock import LockEntity, LockEntityFeature
+from homeassistant.components.lock import (
+    LockEntity,
+    LockEntityFeature,
+    LockEntityStateAttribute,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     ATTR_CODE,
@@ -70,8 +72,8 @@ DEFAULT_NAME = "MQTT Lock"
 
 MQTT_LOCK_ATTRIBUTES_BLOCKED = frozenset(
     {
-        lock.ATTR_CHANGED_BY,
-        lock.ATTR_CODE_FORMAT,
+        LockEntityStateAttribute.CHANGED_BY,
+        LockEntityStateAttribute.CODE_FORMAT,
     }
 )
 
@@ -141,10 +143,12 @@ class MqttLock(MqttEntity, LockEntity):
     _value_template: Callable[[ReceivePayloadType], ReceivePayloadType]
 
     @staticmethod
+    @override
     def config_schema() -> vol.Schema:
         """Return the config schema."""
         return DISCOVERY_SCHEMA
 
+    @override
     def _setup_from_config(self, config: ConfigType) -> None:
         """(Re)Setup the entity."""
         if (
@@ -188,7 +192,10 @@ class MqttLock(MqttEntity, LockEntity):
             return
         if payload == self._config[CONF_PAYLOAD_RESET]:
             # Reset the state to `unknown`
-            self._attr_is_locked = None
+            self._attr_is_locked = self._attr_is_locking = None
+            self._attr_is_unlocking = None
+            self._attr_is_open = self._attr_is_opening = None
+            self._attr_is_jammed = None
         elif payload in self._valid_states:
             self._attr_is_locked = payload == self._config[CONF_STATE_LOCKED]
             self._attr_is_locking = payload == self._config[CONF_STATE_LOCKING]
@@ -198,6 +205,7 @@ class MqttLock(MqttEntity, LockEntity):
             self._attr_is_jammed = payload == self._config[CONF_STATE_JAMMED]
 
     @callback
+    @override
     def _prepare_subscribe_topics(self) -> None:
         """(Re)Subscribe to topics."""
         self.add_subscription(
@@ -213,10 +221,12 @@ class MqttLock(MqttEntity, LockEntity):
             },
         )
 
+    @override
     async def _subscribe_topics(self) -> None:
         """(Re)Subscribe to topics."""
         subscription.async_subscribe_topics_internal(self.hass, self._sub_state)
 
+    @override
     async def async_lock(self, **kwargs: Any) -> None:
         """Lock the device.
 
@@ -232,6 +242,7 @@ class MqttLock(MqttEntity, LockEntity):
             self._attr_is_locked = True
             self.async_write_ha_state()
 
+    @override
     async def async_unlock(self, **kwargs: Any) -> None:
         """Unlock the device.
 
@@ -247,6 +258,7 @@ class MqttLock(MqttEntity, LockEntity):
             self._attr_is_locked = False
             self.async_write_ha_state()
 
+    @override
     async def async_open(self, **kwargs: Any) -> None:
         """Open the door latch.
 

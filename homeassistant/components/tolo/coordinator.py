@@ -1,10 +1,8 @@
 """Component to control TOLO Sauna/Steam Bath."""
 
-from __future__ import annotations
-
 from datetime import timedelta
 import logging
-from typing import NamedTuple
+from typing import NamedTuple, override
 
 from tololib import ToloClient, ToloSettings, ToloStatus
 
@@ -17,6 +15,8 @@ from .const import DEFAULT_RETRY_COUNT, DEFAULT_RETRY_TIMEOUT
 
 _LOGGER = logging.getLogger(__name__)
 
+type ToloConfigEntry = ConfigEntry[ToloSaunaUpdateCoordinator]
+
 
 class ToloSaunaData(NamedTuple):
     """Compound class for reflecting full state (status and info) of a TOLO Sauna."""
@@ -28,9 +28,9 @@ class ToloSaunaData(NamedTuple):
 class ToloSaunaUpdateCoordinator(DataUpdateCoordinator[ToloSaunaData]):
     """DataUpdateCoordinator for TOLO Sauna."""
 
-    config_entry: ConfigEntry
+    config_entry: ToloConfigEntry
 
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+    def __init__(self, hass: HomeAssistant, entry: ToloConfigEntry) -> None:
         """Initialize ToloSaunaUpdateCoordinator."""
         self.client = ToloClient(
             address=entry.data[CONF_HOST],
@@ -45,6 +45,7 @@ class ToloSaunaUpdateCoordinator(DataUpdateCoordinator[ToloSaunaData]):
             update_interval=timedelta(seconds=5),
         )
 
+    @override
     async def _async_update_data(self) -> ToloSaunaData:
         return await self.hass.async_add_executor_job(self._get_tolo_sauna_data)
 

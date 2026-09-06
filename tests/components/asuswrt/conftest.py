@@ -12,6 +12,7 @@ import pytest
 
 from .common import (
     ASUSWRT_BASE,
+    HOST,
     MOCK_MACS,
     PROTOCOL_HTTP,
     PROTOCOL_SSH,
@@ -155,6 +156,9 @@ def mock_controller_connect_http(mock_devices_http):
         # Simulate connection status
         instance.connected = True
 
+        # Set the webpanel address
+        instance.webpanel = f"http://{HOST}:80"
+
         # Identity
         instance.async_get_identity.return_value = AsusDevice(
             mac=ROUTER_MAC_ADDR,
@@ -179,7 +183,7 @@ def mock_controller_connect_http(mock_devices_http):
 
 
 def make_async_get_data_side_effect(fail_types=None):
-    """Return a side effect for async_get_data that fails for specified AsusData types."""
+    """Return a side effect for async_get_data that fails for types."""
     fail_types = set(fail_types or [])
 
     def side_effect(datatype, *args, **kwargs):

@@ -54,6 +54,17 @@ def test_json_encoder(hass: HomeAssistant, encoder: type[json.JSONEncoder]) -> N
     assert json_round_trip(default) == json_round_trip(state.as_dict())
 
 
+def test_default_json_encoder(hass: HomeAssistant) -> None:
+    """Test the default JSON encoder for date and time."""
+    ha_json_enc = DefaultHASSJSONEncoder()
+
+    today = datetime.date(2026, 8, 23)
+    assert ha_json_enc.default(today) == today.isoformat()
+
+    current_time = datetime.time(12, 0)
+    assert ha_json_enc.default(current_time) == current_time.isoformat()
+
+
 def test_json_encoder_raises(hass: HomeAssistant) -> None:
     """Test the JSON encoder raises on unsupported types."""
     ha_json_enc = DefaultHASSJSONEncoder()
@@ -147,6 +158,27 @@ def test_json_dumps_rgb_color_subclass() -> None:
     assert json_dumps(rgb) == "[4,2,1]"
 
 
+def test_json_dumps_date_time_subclasses() -> None:
+    """Test the json dumps with date and time subclasses."""
+
+    class CustomDate(datetime.date):
+        """Custom date subclass."""
+
+    class CustomTime(datetime.time):
+        """Custom time subclass."""
+
+    class CustomDatetime(datetime.datetime):
+        """Custom datetime subclass."""
+
+    d = CustomDate(2026, 8, 23)
+    t = CustomTime(12, 30, 45)
+    dt = CustomDatetime(2026, 8, 23, 12, 30, 45)
+
+    assert json_dumps({"date": d, "time": t, "datetime": dt}) == (
+        '{"date":"2026-08-23","time":"12:30:45","datetime":"2026-08-23T12:30:45"}'
+    )
+
+
 def test_json_fragments() -> None:
     """Test the json dumps with a fragment."""
 
@@ -237,9 +269,7 @@ def test_save_bad_data() -> None:
     with pytest.raises(SerializationError) as excinfo:
         save_json("test4", {"hello": CannotSerializeMe()})
 
-    assert "Failed to serialize to JSON: test4. Bad data at $.hello=" in str(
-        excinfo.value
-    )
+    assert "Bad data at $.hello=" in str(excinfo.value)
 
 
 def test_custom_encoder(tmp_path: Path) -> None:
@@ -306,7 +336,7 @@ def test_find_unserializable_data() -> None:
     assert find_paths_unserializable_data({("A",): 1}) == {"$<key: ('A',)>": ("A",)}
     assert math.isnan(
         find_paths_unserializable_data(
-            float("nan"), dump=partial(json.dumps, allow_nan=False)
+            math.nan, dump=partial(json.dumps, allow_nan=False)
         )["$"]
     )
 

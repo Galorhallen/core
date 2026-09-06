@@ -1,33 +1,30 @@
 """Typing Helpers for Home Assistant."""
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from functools import lru_cache
 from math import floor, log10
+from typing import override
 
 from homeassistant.const import (
-    CONCENTRATION_GRAMS_PER_CUBIC_METER,
-    CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
-    CONCENTRATION_MILLIGRAMS_PER_CUBIC_METER,
-    CONCENTRATION_PARTS_PER_BILLION,
-    CONCENTRATION_PARTS_PER_MILLION,
-    PERCENTAGE,
     UNIT_NOT_RECOGNIZED_TEMPLATE,
     UnitOfApparentPower,
     UnitOfArea,
     UnitOfBloodGlucoseConcentration,
     UnitOfConductivity,
     UnitOfDataRate,
+    UnitOfDensity,
     UnitOfElectricCurrent,
     UnitOfElectricPotential,
     UnitOfEnergy,
     UnitOfEnergyDistance,
+    UnitOfFrequency,
     UnitOfInformation,
     UnitOfLength,
     UnitOfMass,
     UnitOfPower,
     UnitOfPressure,
+    UnitOfRadiationConcentration,
+    UnitOfRatio,
     UnitOfReactiveEnergy,
     UnitOfReactivePower,
     UnitOfSpeed,
@@ -38,6 +35,7 @@ from homeassistant.const import (
     UnitOfVolumetricFlux,
 )
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.deprecation import deprecated_function
 
 # Distance conversion constants
 _MM_TO_M = 0.001  # 1 mm = 0.001 m
@@ -68,7 +66,8 @@ _HECTARE_TO_M2 = 100 * 100  # 1 hectare = 10,000 m²
 _MIN_TO_SEC = 60  # 1 min = 60 seconds
 _HRS_TO_MINUTES = 60  # 1 hr = 60 minutes
 _HRS_TO_SECS = _HRS_TO_MINUTES * _MIN_TO_SEC  # 1 hr = 60 minutes = 3600 seconds
-_DAYS_TO_SECS = 24 * _HRS_TO_SECS  # 1 day = 24 hours = 86400 seconds
+_DAYS_TO_HRS = 24  # 1 day = 24 hours
+_DAYS_TO_SECS = _DAYS_TO_HRS * _HRS_TO_SECS  # 1 day = 24 hours = 86400 seconds
 
 # Energy conversion constants
 _WH_TO_J = 3600  # 1 Wh = 3600 J
@@ -82,6 +81,7 @@ _STONE_TO_G = _POUND_TO_G * 14  # 14 pounds to a stone
 # Pressure conversion constants
 _STANDARD_GRAVITY = 9.80665
 _MERCURY_DENSITY = 13.5951
+_INH2O_TO_PA = 249.0889083333348  # 1 inH₂O = 249.0889083333348 Pa at 4°C
 
 # Volume conversion constants
 _L_TO_CUBIC_METER = 0.001  # 1 L = 0.001 m³
@@ -89,6 +89,25 @@ _ML_TO_CUBIC_METER = 0.001 * _L_TO_CUBIC_METER  # 1 mL = 0.001 L
 _GALLON_TO_CUBIC_METER = 231 * pow(_IN_TO_M, 3)  # US gallon is 231 cubic inches
 _FLUID_OUNCE_TO_CUBIC_METER = _GALLON_TO_CUBIC_METER / 128  # 128 fl. oz. in a US gallon
 _CUBIC_FOOT_TO_CUBIC_METER = pow(_FOOT_TO_M, 3)
+
+# Gas concentration conversion constants
+_IDEAL_GAS_CONSTANT = 8.31446261815324  # m3⋅Pa⋅K⁻¹⋅mol⁻¹
+# Ambient constants based on European Commission recommendations (20 °C and 1013mb)
+_AMBIENT_TEMPERATURE = 293.15  # K (20 °C)
+_AMBIENT_PRESSURE = 101325  # Pa (1 atm)
+_AMBIENT_IDEAL_GAS_MOLAR_VOLUME = (  # m3⋅mol⁻¹
+    _IDEAL_GAS_CONSTANT * _AMBIENT_TEMPERATURE / _AMBIENT_PRESSURE
+)
+# Molar masses in g⋅mol⁻¹
+_CARBON_MONOXIDE_MOLAR_MASS = 28.01
+_GLUCOSE_MOLAR_MASS = 180.16
+_NITROGEN_DIOXIDE_MOLAR_MASS = 46.0055
+_NITROGEN_MONOXIDE_MOLAR_MASS = 30.0061
+_OZONE_MOLAR_MASS = 48.00
+_SULPHUR_DIOXIDE_MOLAR_MASS = 64.066
+
+# Radiation concentration conversion constant
+_PICOCURIES_PER_LITER_TO_BECQUEREL_PER_CUBIC_METER = 37  # 1 pCi/L = 37 Bq/m³
 
 
 class BaseUnitConverter:
@@ -136,12 +155,17 @@ class BaseUnitConverter:
     def converter_factory_allow_none(
         cls, from_unit: str | None, to_unit: str | None
     ) -> Callable[[float | None], float | None]:
-        """Return a function to convert one unit of measurement to another which allows None."""
+        """Return a function to convert a unit to another.
+
+        Allows None values.
+        """
         if from_unit == to_unit:
             return lambda value: value
         from_ratio, to_ratio = cls._get_from_to_ratio(from_unit, to_unit)
         if cls._are_unit_inverses(from_unit, to_unit):
-            return lambda val: None if val is None else to_ratio / (val / from_ratio)
+            return lambda val: (
+                None if val is None or val == 0 else to_ratio / (val / from_ratio)
+            )
         return lambda val: None if val is None else (val / from_ratio) * to_ratio
 
     @classmethod
@@ -167,25 +191,20 @@ class BaseUnitConverter:
         return (from_unit in cls._UNIT_INVERSES) != (to_unit in cls._UNIT_INVERSES)
 
 
-class DataRateConverter(BaseUnitConverter):
-    """Utility to convert data rate values."""
+class ApparentPowerConverter(BaseUnitConverter):
+    """Utility to convert apparent power values."""
 
-    UNIT_CLASS = "data_rate"
-    # Units in terms of bits
+    UNIT_CLASS = "apparent_power"
     _UNIT_CONVERSION: dict[str | None, float] = {
-        UnitOfDataRate.BITS_PER_SECOND: 1,
-        UnitOfDataRate.KILOBITS_PER_SECOND: 1 / 1e3,
-        UnitOfDataRate.MEGABITS_PER_SECOND: 1 / 1e6,
-        UnitOfDataRate.GIGABITS_PER_SECOND: 1 / 1e9,
-        UnitOfDataRate.BYTES_PER_SECOND: 1 / 8,
-        UnitOfDataRate.KILOBYTES_PER_SECOND: 1 / 8e3,
-        UnitOfDataRate.MEGABYTES_PER_SECOND: 1 / 8e6,
-        UnitOfDataRate.GIGABYTES_PER_SECOND: 1 / 8e9,
-        UnitOfDataRate.KIBIBYTES_PER_SECOND: 1 / 2**13,
-        UnitOfDataRate.MEBIBYTES_PER_SECOND: 1 / 2**23,
-        UnitOfDataRate.GIBIBYTES_PER_SECOND: 1 / 2**33,
+        UnitOfApparentPower.MILLIVOLT_AMPERE: 1 * 1000,
+        UnitOfApparentPower.VOLT_AMPERE: 1,
+        UnitOfApparentPower.KILO_VOLT_AMPERE: 1 / 1000,
     }
-    VALID_UNITS = set(UnitOfDataRate)
+    VALID_UNITS = {
+        UnitOfApparentPower.MILLIVOLT_AMPERE,
+        UnitOfApparentPower.VOLT_AMPERE,
+        UnitOfApparentPower.KILO_VOLT_AMPERE,
+    }
 
 
 class AreaConverter(BaseUnitConverter):
@@ -205,6 +224,77 @@ class AreaConverter(BaseUnitConverter):
         UnitOfArea.HECTARES: 1 / _HECTARE_TO_M2,
     }
     VALID_UNITS = set(UnitOfArea)
+
+
+class BloodGlucoseConcentrationConverter(BaseUnitConverter):
+    """Utility to convert blood glucose concentration values."""
+
+    UNIT_CLASS = "blood_glucose_concentration"
+    _UNIT_CONVERSION: dict[str | None, float] = {
+        UnitOfBloodGlucoseConcentration.MILLIGRAMS_PER_DECILITER: (
+            _GLUCOSE_MOLAR_MASS / 10
+        ),
+        UnitOfBloodGlucoseConcentration.MILLIMOLE_PER_LITER: 1,
+    }
+    VALID_UNITS = set(UnitOfBloodGlucoseConcentration)
+
+
+class CarbonMonoxideConcentrationConverter(BaseUnitConverter):
+    """Convert carbon monoxide ratio to mass per volume.
+
+    Using ambient temperature of 20°C and pressure of 1 ATM.
+    """
+
+    UNIT_CLASS = "carbon_monoxide"
+    _UNIT_CONVERSION: dict[str | None, float] = {
+        UnitOfRatio.PARTS_PER_BILLION: 1e9,
+        UnitOfRatio.PARTS_PER_MILLION: 1e6,
+        UnitOfDensity.MILLIGRAMS_PER_CUBIC_METER: (
+            _CARBON_MONOXIDE_MOLAR_MASS / _AMBIENT_IDEAL_GAS_MOLAR_VOLUME * 1e3
+        ),
+        UnitOfDensity.MICROGRAMS_PER_CUBIC_METER: (
+            _CARBON_MONOXIDE_MOLAR_MASS / _AMBIENT_IDEAL_GAS_MOLAR_VOLUME * 1e6
+        ),
+    }
+    VALID_UNITS = {
+        UnitOfRatio.PARTS_PER_BILLION,
+        UnitOfRatio.PARTS_PER_MILLION,
+        UnitOfDensity.MILLIGRAMS_PER_CUBIC_METER,
+        UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
+    }
+
+
+class ConductivityConverter(BaseUnitConverter):
+    """Utility to convert electric current values."""
+
+    UNIT_CLASS = "conductivity"
+    _UNIT_CONVERSION: dict[str | None, float] = {
+        UnitOfConductivity.MICROSIEMENS_PER_CM: 1,
+        UnitOfConductivity.MILLISIEMENS_PER_CM: 1e-3,
+        UnitOfConductivity.SIEMENS_PER_CM: 1e-6,
+    }
+    VALID_UNITS = set(UnitOfConductivity)
+
+
+class DataRateConverter(BaseUnitConverter):
+    """Utility to convert data rate values."""
+
+    UNIT_CLASS = "data_rate"
+    # Units in terms of bits
+    _UNIT_CONVERSION: dict[str | None, float] = {
+        UnitOfDataRate.BITS_PER_SECOND: 1,
+        UnitOfDataRate.KILOBITS_PER_SECOND: 1 / 1e3,
+        UnitOfDataRate.MEGABITS_PER_SECOND: 1 / 1e6,
+        UnitOfDataRate.GIGABITS_PER_SECOND: 1 / 1e9,
+        UnitOfDataRate.BYTES_PER_SECOND: 1 / 8,
+        UnitOfDataRate.KILOBYTES_PER_SECOND: 1 / 8e3,
+        UnitOfDataRate.MEGABYTES_PER_SECOND: 1 / 8e6,
+        UnitOfDataRate.GIGABYTES_PER_SECOND: 1 / 8e9,
+        UnitOfDataRate.KIBIBYTES_PER_SECOND: 1 / 2**13,
+        UnitOfDataRate.MEBIBYTES_PER_SECOND: 1 / 2**23,
+        UnitOfDataRate.GIBIBYTES_PER_SECOND: 1 / 2**33,
+    }
+    VALID_UNITS = set(UnitOfDataRate)
 
 
 class DistanceConverter(BaseUnitConverter):
@@ -235,27 +325,28 @@ class DistanceConverter(BaseUnitConverter):
     }
 
 
-class BloodGlucoseConcentrationConverter(BaseUnitConverter):
-    """Utility to convert blood glucose concentration values."""
+class DurationConverter(BaseUnitConverter):
+    """Utility to convert duration values."""
 
-    UNIT_CLASS = "blood_glucose_concentration"
+    UNIT_CLASS = "duration"
     _UNIT_CONVERSION: dict[str | None, float] = {
-        UnitOfBloodGlucoseConcentration.MILLIGRAMS_PER_DECILITER: 18,
-        UnitOfBloodGlucoseConcentration.MILLIMOLE_PER_LITER: 1,
+        UnitOfTime.MICROSECONDS: 1000000,
+        UnitOfTime.MILLISECONDS: 1000,
+        UnitOfTime.SECONDS: 1,
+        UnitOfTime.MINUTES: 1 / _MIN_TO_SEC,
+        UnitOfTime.HOURS: 1 / _HRS_TO_SECS,
+        UnitOfTime.DAYS: 1 / _DAYS_TO_SECS,
+        UnitOfTime.WEEKS: 1 / (7 * _DAYS_TO_SECS),
     }
-    VALID_UNITS = set(UnitOfBloodGlucoseConcentration)
-
-
-class ConductivityConverter(BaseUnitConverter):
-    """Utility to convert electric current values."""
-
-    UNIT_CLASS = "conductivity"
-    _UNIT_CONVERSION: dict[str | None, float] = {
-        UnitOfConductivity.MICROSIEMENS_PER_CM: 1,
-        UnitOfConductivity.MILLISIEMENS_PER_CM: 1e-3,
-        UnitOfConductivity.SIEMENS_PER_CM: 1e-6,
+    VALID_UNITS = {
+        UnitOfTime.MICROSECONDS,
+        UnitOfTime.MILLISECONDS,
+        UnitOfTime.SECONDS,
+        UnitOfTime.MINUTES,
+        UnitOfTime.HOURS,
+        UnitOfTime.DAYS,
+        UnitOfTime.WEEKS,
     }
-    VALID_UNITS = set(UnitOfConductivity)
 
 
 class ElectricCurrentConverter(BaseUnitConverter):
@@ -265,8 +356,23 @@ class ElectricCurrentConverter(BaseUnitConverter):
     _UNIT_CONVERSION: dict[str | None, float] = {
         UnitOfElectricCurrent.AMPERE: 1,
         UnitOfElectricCurrent.MILLIAMPERE: 1e3,
+        UnitOfElectricCurrent.MICROAMPERE: 1e6,
     }
     VALID_UNITS = set(UnitOfElectricCurrent)
+
+
+class FrequencyConverter(BaseUnitConverter):
+    """Utility to convert frequency values."""
+
+    UNIT_CLASS = "frequency"
+    _UNIT_CONVERSION: dict[str | None, float] = {
+        UnitOfFrequency.MILLIHERTZ: 1e3,
+        UnitOfFrequency.HERTZ: 1,
+        UnitOfFrequency.KILOHERTZ: 1 / 1e3,
+        UnitOfFrequency.MEGAHERTZ: 1 / 1e6,
+        UnitOfFrequency.GIGAHERTZ: 1 / 1e9,
+    }
+    VALID_UNITS = set(UnitOfFrequency)
 
 
 class ElectricPotentialConverter(BaseUnitConverter):
@@ -384,17 +490,71 @@ class MassConverter(BaseUnitConverter):
     }
 
 
-class ApparentPowerConverter(BaseUnitConverter):
-    """Utility to convert apparent power values."""
+class MassVolumeConcentrationConverter(BaseUnitConverter):
+    """Utility to convert mass volume concentration values."""
 
-    UNIT_CLASS = "apparent_power"
+    UNIT_CLASS = "concentration"
     _UNIT_CONVERSION: dict[str | None, float] = {
-        UnitOfApparentPower.MILLIVOLT_AMPERE: 1 * 1000,
-        UnitOfApparentPower.VOLT_AMPERE: 1,
+        UnitOfDensity.MICROGRAMS_PER_CUBIC_METER: 1_000_000.0,  # 1000 µg/m³ = 1 mg/m³
+        UnitOfDensity.MILLIGRAMS_PER_CUBIC_METER: 1000.0,  # 1000 mg/m³ = 1 g/m³
+        UnitOfDensity.GRAMS_PER_CUBIC_METER: 1.0,
     }
     VALID_UNITS = {
-        UnitOfApparentPower.MILLIVOLT_AMPERE,
-        UnitOfApparentPower.VOLT_AMPERE,
+        UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
+        UnitOfDensity.MILLIGRAMS_PER_CUBIC_METER,
+        UnitOfDensity.GRAMS_PER_CUBIC_METER,
+    }
+
+
+class NitrogenDioxideConcentrationConverter(BaseUnitConverter):
+    """Convert nitrogen dioxide ratio to mass per volume."""
+
+    UNIT_CLASS = "nitrogen_dioxide"
+    _UNIT_CONVERSION: dict[str | None, float] = {
+        UnitOfRatio.PARTS_PER_BILLION: 1e9,
+        UnitOfRatio.PARTS_PER_MILLION: 1e6,
+        UnitOfDensity.MICROGRAMS_PER_CUBIC_METER: (
+            _NITROGEN_DIOXIDE_MOLAR_MASS / _AMBIENT_IDEAL_GAS_MOLAR_VOLUME * 1e6
+        ),
+    }
+    VALID_UNITS = {
+        UnitOfRatio.PARTS_PER_BILLION,
+        UnitOfRatio.PARTS_PER_MILLION,
+        UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
+    }
+
+
+class NitrogenMonoxideConcentrationConverter(BaseUnitConverter):
+    """Convert nitrogen monoxide ratio to mass per volume."""
+
+    UNIT_CLASS = "nitrogen_monoxide"
+    _UNIT_CONVERSION: dict[str | None, float] = {
+        UnitOfRatio.PARTS_PER_BILLION: 1e9,
+        UnitOfDensity.MICROGRAMS_PER_CUBIC_METER: (
+            _NITROGEN_MONOXIDE_MOLAR_MASS / _AMBIENT_IDEAL_GAS_MOLAR_VOLUME * 1e6
+        ),
+    }
+    VALID_UNITS = {
+        UnitOfRatio.PARTS_PER_BILLION,
+        UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
+    }
+
+
+class OzoneConcentrationConverter(BaseUnitConverter):
+    """Convert ozone ratio to mass per volume."""
+
+    UNIT_CLASS = "ozone"
+    _UNIT_CONVERSION: dict[str | None, float] = {
+        UnitOfRatio.PARTS_PER_BILLION: 1e9,
+        UnitOfRatio.PARTS_PER_MILLION: 1e6,
+        UnitOfDensity.MICROGRAMS_PER_CUBIC_METER: (
+            _OZONE_MOLAR_MASS / _AMBIENT_IDEAL_GAS_MOLAR_VOLUME * 1e6
+        ),
+    }
+    VALID_UNITS = {
+        UnitOfRatio.PARTS_PER_BILLION,
+        UnitOfRatio.PARTS_PER_MILLION,
+        UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
     }
 
 
@@ -409,6 +569,7 @@ class PowerConverter(BaseUnitConverter):
         UnitOfPower.MEGA_WATT: 1 / 1e6,
         UnitOfPower.GIGA_WATT: 1 / 1e9,
         UnitOfPower.TERA_WATT: 1 / 1e12,
+        UnitOfPower.BTU_PER_HOUR: 1 / 0.29307107,
     }
     VALID_UNITS = {
         UnitOfPower.MILLIWATT,
@@ -417,6 +578,7 @@ class PowerConverter(BaseUnitConverter):
         UnitOfPower.MEGA_WATT,
         UnitOfPower.GIGA_WATT,
         UnitOfPower.TERA_WATT,
+        UnitOfPower.BTU_PER_HOUR,
     }
 
 
@@ -425,6 +587,7 @@ class PressureConverter(BaseUnitConverter):
 
     UNIT_CLASS = "pressure"
     _UNIT_CONVERSION: dict[str | None, float] = {
+        UnitOfPressure.MILLIPASCAL: 1 * 1000,
         UnitOfPressure.PA: 1,
         UnitOfPressure.HPA: 1 / 100,
         UnitOfPressure.KPA: 1 / 1000,
@@ -433,11 +596,14 @@ class PressureConverter(BaseUnitConverter):
         UnitOfPressure.MBAR: 1 / 100,
         UnitOfPressure.INHG: 1
         / (_IN_TO_M * 1000 * _STANDARD_GRAVITY * _MERCURY_DENSITY),
+        UnitOfPressure.INH2O: 1 / _INH2O_TO_PA,
         UnitOfPressure.PSI: 1 / 6894.757,
         UnitOfPressure.MMHG: 1
         / (_MM_TO_M * 1000 * _STANDARD_GRAVITY * _MERCURY_DENSITY),
+        UnitOfPressure.ATM: 1 / 101325,
     }
     VALID_UNITS = {
+        UnitOfPressure.MILLIPASCAL,
         UnitOfPressure.PA,
         UnitOfPressure.HPA,
         UnitOfPressure.KPA,
@@ -445,9 +611,24 @@ class PressureConverter(BaseUnitConverter):
         UnitOfPressure.CBAR,
         UnitOfPressure.MBAR,
         UnitOfPressure.INHG,
+        UnitOfPressure.INH2O,
         UnitOfPressure.PSI,
         UnitOfPressure.MMHG,
+        UnitOfPressure.ATM,
     }
+
+
+class RadiationConcentrationConverter(BaseUnitConverter):
+    """Utility to convert radiation concentration values."""
+
+    UNIT_CLASS = "radiation_concentration"
+    _UNIT_CONVERSION: dict[str | None, float] = {
+        UnitOfRadiationConcentration.BECQUEREL_PER_CUBIC_METER: 1,
+        UnitOfRadiationConcentration.PICOCURIES_PER_LITER: (
+            1 / _PICOCURIES_PER_LITER_TO_BECQUEREL_PER_CUBIC_METER
+        ),
+    }
+    VALID_UNITS = set(UnitOfRadiationConcentration)
 
 
 class ReactiveEnergyConverter(BaseUnitConverter):
@@ -490,6 +671,7 @@ class SpeedConverter(BaseUnitConverter):
         UnitOfSpeed.INCHES_PER_SECOND: 1 / _IN_TO_M,
         UnitOfSpeed.KILOMETERS_PER_HOUR: _HRS_TO_SECS / _KM_TO_M,
         UnitOfSpeed.KNOTS: _HRS_TO_SECS / _NAUTICAL_MILE_TO_M,
+        UnitOfSpeed.METERS_PER_MINUTE: _MIN_TO_SEC,
         UnitOfSpeed.METERS_PER_SECOND: 1,
         UnitOfSpeed.MILLIMETERS_PER_SECOND: 1 / _MM_TO_M,
         UnitOfSpeed.MILES_PER_HOUR: _HRS_TO_SECS / _MILE_TO_M,
@@ -504,6 +686,7 @@ class SpeedConverter(BaseUnitConverter):
         UnitOfSpeed.FEET_PER_SECOND,
         UnitOfSpeed.KILOMETERS_PER_HOUR,
         UnitOfSpeed.KNOTS,
+        UnitOfSpeed.METERS_PER_MINUTE,
         UnitOfSpeed.METERS_PER_SECOND,
         UnitOfSpeed.MILES_PER_HOUR,
         UnitOfSpeed.MILLIMETERS_PER_SECOND,
@@ -512,6 +695,7 @@ class SpeedConverter(BaseUnitConverter):
 
     @classmethod
     @lru_cache
+    @override
     def converter_factory(
         cls, from_unit: str | None, to_unit: str | None
     ) -> Callable[[float], float]:
@@ -526,10 +710,14 @@ class SpeedConverter(BaseUnitConverter):
 
     @classmethod
     @lru_cache
+    @override
     def converter_factory_allow_none(
         cls, from_unit: str | None, to_unit: str | None
     ) -> Callable[[float | None], float | None]:
-        """Return a function to convert a speed from one unit to another which allows None."""
+        """Return a function to convert speed units.
+
+        Allows None values.
+        """
         if from_unit == to_unit:
             # Return a function that does nothing. This is not
             # in _converter_factory because we do not want to wrap
@@ -575,6 +763,22 @@ class SpeedConverter(BaseUnitConverter):
         return float(0.836 * beaufort ** (3 / 2))
 
 
+class SulphurDioxideConcentrationConverter(BaseUnitConverter):
+    """Convert sulphur dioxide ratio to mass per volume."""
+
+    UNIT_CLASS = "sulphur_dioxide"
+    _UNIT_CONVERSION: dict[str | None, float] = {
+        UnitOfRatio.PARTS_PER_BILLION: 1e9,
+        UnitOfDensity.MICROGRAMS_PER_CUBIC_METER: (
+            _SULPHUR_DIOXIDE_MOLAR_MASS / _AMBIENT_IDEAL_GAS_MOLAR_VOLUME * 1e6
+        ),
+    }
+    VALID_UNITS = {
+        UnitOfRatio.PARTS_PER_BILLION,
+        UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
+    }
+
+
 class TemperatureConverter(BaseUnitConverter):
     """Utility to convert temperature values."""
 
@@ -592,6 +796,7 @@ class TemperatureConverter(BaseUnitConverter):
 
     @classmethod
     @lru_cache
+    @override
     def converter_factory(
         cls, from_unit: str | None, to_unit: str | None
     ) -> Callable[[float], float]:
@@ -606,10 +811,14 @@ class TemperatureConverter(BaseUnitConverter):
 
     @classmethod
     @lru_cache
+    @override
     def converter_factory_allow_none(
         cls, from_unit: str | None, to_unit: str | None
     ) -> Callable[[float | None], float | None]:
-        """Return a function to convert a temperature from one unit to another which allows None."""
+        """Return a function to convert temperature units.
+
+        Allows None values.
+        """
         if from_unit == to_unit:
             # Return a function that does nothing. This is not
             # in _converter_factory because we do not want to wrap
@@ -662,6 +871,9 @@ class TemperatureConverter(BaseUnitConverter):
         )
 
     @classmethod
+    @deprecated_function(
+        "TemperatureDeltaConverter.convert", breaks_in_ha_version="2026.12.0"
+    )
     def convert_interval(cls, interval: float, from_unit: str, to_unit: str) -> float:
         """Convert a temperature interval from one unit to another.
 
@@ -705,35 +917,40 @@ class TemperatureConverter(BaseUnitConverter):
         return celsius + 273.15
 
 
+class TemperatureDeltaConverter(BaseUnitConverter):
+    """Utility to convert temperature intervals.
+
+    eg. a 10°C interval (10°C to 20°C) will return a 18°F (50°F to 68°F) interval
+    """
+
+    UNIT_CLASS = "temperature_delta"
+    VALID_UNITS = {
+        UnitOfTemperature.CELSIUS,
+        UnitOfTemperature.FAHRENHEIT,
+        UnitOfTemperature.KELVIN,
+    }
+    _UNIT_CONVERSION = {
+        UnitOfTemperature.CELSIUS: 1.0,
+        UnitOfTemperature.FAHRENHEIT: 1.8,
+        UnitOfTemperature.KELVIN: 1.0,
+    }
+
+
 class UnitlessRatioConverter(BaseUnitConverter):
     """Utility to convert unitless ratios."""
 
     UNIT_CLASS = "unitless"
     _UNIT_CONVERSION: dict[str | None, float] = {
         None: 1,
-        CONCENTRATION_PARTS_PER_BILLION: 1000000000,
-        CONCENTRATION_PARTS_PER_MILLION: 1000000,
-        PERCENTAGE: 100,
+        UnitOfRatio.PARTS_PER_BILLION: 1000000000,
+        UnitOfRatio.PARTS_PER_MILLION: 1000000,
+        UnitOfRatio.PERCENTAGE: 100,
     }
     VALID_UNITS = {
         None,
-        PERCENTAGE,
-    }
-
-
-class MassVolumeConcentrationConverter(BaseUnitConverter):
-    """Utility to convert mass volume concentration values."""
-
-    UNIT_CLASS = "concentration"
-    _UNIT_CONVERSION: dict[str | None, float] = {
-        CONCENTRATION_MICROGRAMS_PER_CUBIC_METER: 1000000.0,  # 1000 µg/m³ = 1 mg/m³
-        CONCENTRATION_MILLIGRAMS_PER_CUBIC_METER: 1000.0,  # 1000 mg/m³ = 1 g/m³
-        CONCENTRATION_GRAMS_PER_CUBIC_METER: 1.0,
-    }
-    VALID_UNITS = {
-        CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
-        CONCENTRATION_MILLIGRAMS_PER_CUBIC_METER,
-        CONCENTRATION_GRAMS_PER_CUBIC_METER,
+        UnitOfRatio.PARTS_PER_BILLION,
+        UnitOfRatio.PARTS_PER_MILLION,
+        UnitOfRatio.PERCENTAGE,
     }
 
 
@@ -750,6 +967,7 @@ class VolumeConverter(BaseUnitConverter):
         UnitOfVolume.CUBIC_METERS: 1,
         UnitOfVolume.CUBIC_FEET: 1 / _CUBIC_FOOT_TO_CUBIC_METER,
         UnitOfVolume.CENTUM_CUBIC_FEET: 1 / (100 * _CUBIC_FOOT_TO_CUBIC_METER),
+        UnitOfVolume.MILLE_CUBIC_FEET: 1 / (1000 * _CUBIC_FOOT_TO_CUBIC_METER),
     }
     VALID_UNITS = {
         UnitOfVolume.LITERS,
@@ -759,6 +977,7 @@ class VolumeConverter(BaseUnitConverter):
         UnitOfVolume.CUBIC_METERS,
         UnitOfVolume.CUBIC_FEET,
         UnitOfVolume.CENTUM_CUBIC_FEET,
+        UnitOfVolume.MILLE_CUBIC_FEET,
     }
 
 
@@ -777,8 +996,10 @@ class VolumeFlowRateConverter(BaseUnitConverter):
         UnitOfVolumeFlowRate.LITERS_PER_MINUTE: 1
         / (_HRS_TO_MINUTES * _L_TO_CUBIC_METER),
         UnitOfVolumeFlowRate.LITERS_PER_SECOND: 1 / (_HRS_TO_SECS * _L_TO_CUBIC_METER),
+        UnitOfVolumeFlowRate.GALLONS_PER_HOUR: 1 / _GALLON_TO_CUBIC_METER,
         UnitOfVolumeFlowRate.GALLONS_PER_MINUTE: 1
         / (_HRS_TO_MINUTES * _GALLON_TO_CUBIC_METER),
+        UnitOfVolumeFlowRate.GALLONS_PER_DAY: _DAYS_TO_HRS / _GALLON_TO_CUBIC_METER,
         UnitOfVolumeFlowRate.MILLILITERS_PER_SECOND: 1
         / (_HRS_TO_SECS * _ML_TO_CUBIC_METER),
     }
@@ -790,30 +1011,8 @@ class VolumeFlowRateConverter(BaseUnitConverter):
         UnitOfVolumeFlowRate.LITERS_PER_HOUR,
         UnitOfVolumeFlowRate.LITERS_PER_MINUTE,
         UnitOfVolumeFlowRate.LITERS_PER_SECOND,
+        UnitOfVolumeFlowRate.GALLONS_PER_HOUR,
         UnitOfVolumeFlowRate.GALLONS_PER_MINUTE,
+        UnitOfVolumeFlowRate.GALLONS_PER_DAY,
         UnitOfVolumeFlowRate.MILLILITERS_PER_SECOND,
-    }
-
-
-class DurationConverter(BaseUnitConverter):
-    """Utility to convert duration values."""
-
-    UNIT_CLASS = "duration"
-    _UNIT_CONVERSION: dict[str | None, float] = {
-        UnitOfTime.MICROSECONDS: 1000000,
-        UnitOfTime.MILLISECONDS: 1000,
-        UnitOfTime.SECONDS: 1,
-        UnitOfTime.MINUTES: 1 / _MIN_TO_SEC,
-        UnitOfTime.HOURS: 1 / _HRS_TO_SECS,
-        UnitOfTime.DAYS: 1 / _DAYS_TO_SECS,
-        UnitOfTime.WEEKS: 1 / (7 * _DAYS_TO_SECS),
-    }
-    VALID_UNITS = {
-        UnitOfTime.MICROSECONDS,
-        UnitOfTime.MILLISECONDS,
-        UnitOfTime.SECONDS,
-        UnitOfTime.MINUTES,
-        UnitOfTime.HOURS,
-        UnitOfTime.DAYS,
-        UnitOfTime.WEEKS,
     }

@@ -1,5 +1,4 @@
 {
-  "title": "Number",
   "device_automation": {
     "action_type": {
       "set_value": "Set value for {entity_name}"
@@ -22,7 +21,7 @@
           "name": "Mode",
           "state": {
             "auto": "Automatic",
-            "box": "Box",
+            "box": "Input field",
             "slider": "Slider"
           }
         },
@@ -67,11 +66,20 @@
     "data_rate": {
       "name": "[%key:component::sensor::entity_component::data_rate::name%]"
     },
+    "data_size": {
+      "name": "[%key:component::sensor::entity_component::data_size::name%]"
+    },
     "distance": {
       "name": "[%key:component::sensor::entity_component::distance::name%]"
     },
+    "duration": {
+      "name": "[%key:component::sensor::entity_component::duration::name%]"
+    },
     "energy": {
       "name": "[%key:component::sensor::entity_component::energy::name%]"
+    },
+    "energy_distance": {
+      "name": "[%key:component::sensor::entity_component::energy_distance::name%]"
     },
     "energy_storage": {
       "name": "[%key:component::sensor::entity_component::energy_storage::name%]"
@@ -93,6 +101,9 @@
     },
     "moisture": {
       "name": "[%key:component::sensor::entity_component::moisture::name%]"
+    },
+    "monetary": {
+      "name": "[%key:component::sensor::entity_component::monetary::name%]"
     },
     "nitrogen_dioxide": {
       "name": "[%key:component::sensor::entity_component::nitrogen_dioxide::name%]"
@@ -118,11 +129,14 @@
     "pm25": {
       "name": "[%key:component::sensor::entity_component::pm25::name%]"
     },
-    "power_factor": {
-      "name": "[%key:component::sensor::entity_component::power_factor::name%]"
+    "pm4": {
+      "name": "[%key:component::sensor::entity_component::pm4::name%]"
     },
     "power": {
       "name": "[%key:component::sensor::entity_component::power::name%]"
+    },
+    "power_factor": {
+      "name": "[%key:component::sensor::entity_component::power_factor::name%]"
     },
     "precipitation": {
       "name": "[%key:component::sensor::entity_component::precipitation::name%]"
@@ -132,6 +146,9 @@
     },
     "pressure": {
       "name": "[%key:component::sensor::entity_component::pressure::name%]"
+    },
+    "radon": {
+      "name": "[%key:component::sensor::entity_component::radon::name%]"
     },
     "reactive_energy": {
       "name": "[%key:component::sensor::entity_component::reactive_energy::name%]"
@@ -154,8 +171,14 @@
     "temperature": {
       "name": "[%key:component::sensor::entity_component::temperature::name%]"
     },
+    "temperature_delta": {
+      "name": "[%key:component::sensor::entity_component::temperature_delta::name%]"
+    },
     "volatile_organic_compounds": {
       "name": "[%key:component::sensor::entity_component::volatile_organic_compounds::name%]"
+    },
+    "volatile_organic_compounds_parts": {
+      "name": "[%key:component::sensor::entity_component::volatile_organic_compounds_parts::name%]"
     },
     "voltage": {
       "name": "[%key:component::sensor::entity_component::voltage::name%]"
@@ -163,11 +186,11 @@
     "volume": {
       "name": "[%key:component::sensor::entity_component::volume::name%]"
     },
-    "volume_storage": {
-      "name": "[%key:component::sensor::entity_component::volume_storage::name%]"
-    },
     "volume_flow_rate": {
       "name": "[%key:component::sensor::entity_component::volume_flow_rate::name%]"
+    },
+    "volume_storage": {
+      "name": "[%key:component::sensor::entity_component::volume_storage::name%]"
     },
     "water": {
       "name": "[%key:component::sensor::entity_component::water::name%]"
@@ -189,14 +212,15 @@
   },
   "services": {
     "set_value": {
-      "name": "Set",
       "description": "Sets the value of a number.",
       "fields": {
         "value": {
-          "name": "Value",
-          "description": "The target value to set."
+          "description": "The target value to set.",
+          "name": "Value"
         }
-      }
+      },
+      "name": "Set number value"
     }
-  }
+  },
+  "title": "Number"
 }

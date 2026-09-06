@@ -38,6 +38,7 @@ from aioairzone.const import (
     API_NAME,
     API_ON,
     API_POWER,
+    API_Q_ADAPT,
     API_ROOM_TEMP,
     API_SET_POINT,
     API_SLEEP,
@@ -47,6 +48,7 @@ from aioairzone.const import (
     API_SYSTEM_ID,
     API_SYSTEM_TYPE,
     API_SYSTEMS,
+    API_TEMP_STEP,
     API_THERMOS_FIRMWARE,
     API_THERMOS_RADIO,
     API_THERMOS_TYPE,
@@ -95,6 +97,7 @@ HVAC_MOCK = {
                     API_ON: 0,
                     API_MAX_TEMP: 30,
                     API_MIN_TEMP: 15,
+                    API_TEMP_STEP: 1,
                     API_SET_POINT: 19.1,
                     API_ROOM_TEMP: 19.6,
                     API_SLEEP: 0,
@@ -353,6 +356,7 @@ HVAC_SYSTEMS_MOCK = {
             API_POWER: 0,
             API_SYSTEM_FIRMWARE: "3.31",
             API_SYSTEM_TYPE: 1,
+            API_Q_ADAPT: 0,
         }
     ]
 }

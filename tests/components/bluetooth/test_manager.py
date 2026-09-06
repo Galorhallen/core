@@ -8,9 +8,11 @@ from unittest.mock import patch
 from bleak.backends.scanner import AdvertisementData, BLEDevice
 from bluetooth_adapters import AdvertisementHistory
 from freezegun import freeze_time
+from habluetooth import BluetoothScanningMode, HaScanner
 
 # pylint: disable-next=no-name-in-module
 from habluetooth.advertisement_tracker import TRACKER_BUFFERING_WOBBLE_SECONDS
+from habluetooth.const import STALE_ROAM_FACTOR
 import pytest
 
 from homeassistant import config_entries
@@ -20,7 +22,6 @@ from homeassistant.components.bluetooth import (
     MONOTONIC_TIME,
     BaseHaRemoteScanner,
     BluetoothChange,
-    BluetoothScanningMode,
     BluetoothServiceInfo,
     BluetoothServiceInfoBleak,
     HaBluetoothConnector,
@@ -38,15 +39,16 @@ from homeassistant.components.bluetooth.const import (
 )
 from homeassistant.components.bluetooth.manager import HomeAssistantBluetoothManager
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.discovery_flow import DiscoveryKey
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 from homeassistant.util.dt import utcnow
-from homeassistant.util.json import json_loads
 
 from . import (
     HCI0_SOURCE_ADDRESS,
     HCI1_SOURCE_ADDRESS,
+    FakeRemoteScanner,
     FakeScanner,
     MockBleakClient,
     _get_manager,
@@ -63,7 +65,7 @@ from tests.common import (
     MockModule,
     async_call_logger_set_level,
     async_fire_time_changed,
-    async_load_fixture,
+    async_load_json_object_fixture,
     mock_integration,
 )
 
@@ -400,9 +402,26 @@ async def test_switching_adapters_based_on_stale_with_discovered_interval(
         start_time_monotonic + 10 + TRACKER_BUFFERING_WOBBLE_SECONDS + 1,
         HCI1_SOURCE_ADDRESS,
     )
-    # Should switch to hci1 since the previous advertisement is stale
-    # even though the signal is poor because the device is now
-    # likely unreachable via hci0
+    # Should not roam yet: a single missed reception interval must not hand a
+    # stationary device to a comparable scanner before the roam gate
+    # (STALE_ROAM_FACTOR stale windows)
+    assert (
+        bluetooth.async_ble_device_from_address(hass, address)
+        is switchbot_device_poor_signal_hci0
+    )
+
+    inject_advertisement_with_time_and_source(
+        hass,
+        switchbot_device_poor_signal_hci1,
+        switchbot_adv_poor_signal_hci1,
+        start_time_monotonic
+        + (10 + TRACKER_BUFFERING_WOBBLE_SECONDS) * STALE_ROAM_FACTOR
+        + 1,
+        HCI1_SOURCE_ADDRESS,
+    )
+    # Past the roam gate (STALE_ROAM_FACTOR stale windows): switch to hci1
+    # since the previous advertisement is stale even though the signal is poor
+    # because the device is now likely unreachable via hci0
     assert (
         bluetooth.async_ble_device_from_address(hass, address)
         is switchbot_device_poor_signal_hci1
@@ -446,8 +465,10 @@ async def test_restore_history_from_dbus_and_remote_adapters(
     """Test we can restore history from dbus along with remote adapters."""
     address = "AA:BB:CC:CC:CC:FF"
 
-    data = hass_storage[storage.REMOTE_SCANNER_STORAGE_KEY] = json_loads(
-        await async_load_fixture(hass, "bluetooth.remote_scanners", bluetooth.DOMAIN)
+    data = hass_storage[
+        storage.REMOTE_SCANNER_STORAGE_KEY
+    ] = await async_load_json_object_fixture(
+        hass, "bluetooth.remote_scanners", bluetooth.DOMAIN
     )
     now = time.time()
     timestamps = data["data"]["atom-bluetooth-proxy-ceaac4"][
@@ -485,13 +506,13 @@ async def test_restore_history_from_dbus_and_corrupted_remote_adapters(
     hass_storage: dict[str, Any],
     disable_new_discovery_flows,
 ) -> None:
-    """Test we can restore history from dbus when the remote adapters data is corrupted."""
+    """Test history restore when remote adapters data is corrupted."""
     address = "AA:BB:CC:CC:CC:FF"
 
-    data = hass_storage[storage.REMOTE_SCANNER_STORAGE_KEY] = json_loads(
-        await async_load_fixture(
-            hass, "bluetooth.remote_scanners.corrupt", bluetooth.DOMAIN
-        )
+    data = hass_storage[
+        storage.REMOTE_SCANNER_STORAGE_KEY
+    ] = await async_load_json_object_fixture(
+        hass, "bluetooth.remote_scanners.corrupt", bluetooth.DOMAIN
     )
     now = time.time()
     timestamps = data["data"]["atom-bluetooth-proxy-ceaac4"][
@@ -615,12 +636,12 @@ async def test_switching_adapters_based_on_rssi_connectable_to_non_connectable(
 
 
 @pytest.mark.usefixtures("enable_bluetooth")
-async def test_connectable_advertisement_can_be_retrieved_with_best_path_is_non_connectable(
+async def test_connectable_adv_retrieved_when_best_path_is_non_connectable(
     hass: HomeAssistant,
     register_hci0_scanner: None,
     register_hci1_scanner: None,
 ) -> None:
-    """Test we can still get a connectable BLEDevice when the best path is non-connectable.
+    """Test connectable BLEDevice when best path is non-connectable.
 
     In this case the device is closer to a non-connectable scanner, but the
     at least one connectable scanner has the device in range.
@@ -789,7 +810,10 @@ async def test_switching_adapters_when_one_stop_scanning(
 async def test_goes_unavailable_connectable_only_and_recovers(
     hass: HomeAssistant,
 ) -> None:
-    """Test all connectable scanners go unavailable, and than recover when there is a non-connectable scanner."""
+    """Test connectable scanners go unavailable and recover.
+
+    Uses a non-connectable scanner for recovery.
+    """
     assert await async_setup_component(hass, bluetooth.DOMAIN, {})
     await hass.async_block_till_done()
 
@@ -951,7 +975,7 @@ async def test_goes_unavailable_connectable_only_and_recovers(
 async def test_goes_unavailable_dismisses_discovery_and_makes_discoverable(
     hass: HomeAssistant,
 ) -> None:
-    """Test that unavailable will dismiss any active discoveries and make device discoverable again."""
+    """Test unavailable dismisses discoveries and re-enables them."""
     mock_bt = [
         {
             "domain": "switchbot",
@@ -1238,7 +1262,8 @@ async def test_set_fallback_interval_big(hass: HomeAssistant) -> None:
     """Test we can set the fallback advertisement interval."""
     assert async_get_fallback_availability_interval(hass, "44:44:33:11:23:12") is None
 
-    # Force the interval to be really big and check it doesn't expire using the default timeout (900)
+    # Force the interval to be really big and check it
+    # doesn't expire using the default timeout (900)
 
     async_set_fallback_availability_interval(hass, "44:44:33:11:23:12", 604800.0)
     assert (
@@ -1737,3 +1762,304 @@ async def test_async_register_disappeared_callback(
 
     cancel1()
     cancel2()
+
+
+@pytest.mark.usefixtures("one_adapter")
+async def test_repair_issue_created_for_degraded_scanner_in_docker(
+    hass: HomeAssistant,
+    issue_registry: ir.IssueRegistry,
+) -> None:
+    """Test repair issue is created when scanner is in degraded mode in Docker."""
+    await async_setup_component(hass, bluetooth.DOMAIN, {})
+    await hass.async_block_till_done()
+
+    manager = _get_manager()
+
+    scanner = HaScanner(
+        mode=BluetoothScanningMode.ACTIVE,
+        adapter="hci0",
+        address="00:11:22:33:44:55",
+    )
+    scanner.async_setup()
+
+    mock_adapters = {
+        "hci0": {
+            "address": "00:11:22:33:44:55",
+            "sw_version": "homeassistant",
+            "hw_version": "usb:v0A5Cp21E8",
+            "passive_scan": False,
+            "manufacturer": "Broadcom",
+            "product": "BCM20702A0",
+            "vendor_id": "0A5C",
+            "product_id": "21E8",
+        }
+    }
+
+    with (
+        patch("habluetooth.manager.IS_LINUX", True),
+        patch.object(type(manager), "is_operating_degraded", return_value=True),
+        patch(
+            "homeassistant.components.bluetooth.manager.is_docker_env",
+            return_value=True,
+        ),
+        patch.object(manager._bluetooth_adapters, "adapters", mock_adapters),
+    ):
+        manager.on_scanner_start(scanner)
+
+        issue_id = f"bluetooth_adapter_missing_permissions_{scanner.source}"
+        issue = issue_registry.async_get_issue(bluetooth.DOMAIN, issue_id)
+        assert issue is not None
+        assert issue.severity == ir.IssueSeverity.WARNING
+        assert not issue.is_fixable
+        assert issue.translation_key == "bluetooth_adapter_missing_permissions"
+
+
+@pytest.mark.usefixtures("one_adapter")
+async def test_repair_issue_deleted_when_scanner_not_degraded(
+    hass: HomeAssistant,
+    issue_registry: ir.IssueRegistry,
+) -> None:
+    """Test repair issue is deleted when scanner is not in degraded mode."""
+    await async_setup_component(hass, bluetooth.DOMAIN, {})
+    await hass.async_block_till_done()
+
+    manager = _get_manager()
+
+    scanner = HaScanner(
+        mode=BluetoothScanningMode.ACTIVE,
+        adapter="hci0",
+        address="00:11:22:33:44:55",
+    )
+    scanner.async_setup()
+
+    mock_adapters = {
+        "hci0": {
+            "address": "00:11:22:33:44:55",
+            "sw_version": "homeassistant",
+            "hw_version": "usb:v0A5Cp21E8",
+            "passive_scan": False,
+            "manufacturer": "Broadcom",
+            "product": "BCM20702A0",
+            "vendor_id": "0A5C",
+            "product_id": "21E8",
+        }
+    }
+
+    issue_id = f"bluetooth_adapter_missing_permissions_{scanner.source}"
+
+    with (
+        patch("habluetooth.manager.IS_LINUX", True),
+        patch.object(type(manager), "is_operating_degraded", return_value=True),
+        patch(
+            "homeassistant.components.bluetooth.manager.is_docker_env",
+            return_value=True,
+        ),
+        patch.object(manager._bluetooth_adapters, "adapters", mock_adapters),
+    ):
+        manager.on_scanner_start(scanner)
+
+    assert issue_registry.async_get_issue(bluetooth.DOMAIN, issue_id) is not None
+
+    with (
+        patch(
+            "homeassistant.components.bluetooth.manager.is_docker_env",
+            return_value=True,
+        ),
+        patch.object(type(manager), "is_operating_degraded", return_value=False),
+    ):
+        manager.on_scanner_start(scanner)
+
+    assert issue_registry.async_get_issue(bluetooth.DOMAIN, issue_id) is None
+
+
+@pytest.mark.usefixtures("one_adapter")
+async def test_no_repair_issue_when_not_docker(
+    hass: HomeAssistant,
+    issue_registry: ir.IssueRegistry,
+) -> None:
+    """Test no repair issue is created when not running in Docker."""
+    assert await async_setup_component(hass, bluetooth.DOMAIN, {})
+    await hass.async_block_till_done()
+
+    manager = _get_manager()
+
+    scanner = HaScanner(
+        mode=BluetoothScanningMode.ACTIVE,
+        adapter="hci0",
+        address="00:11:22:33:44:55",
+    )
+    scanner.async_setup()
+
+    with (
+        patch(
+            "homeassistant.components.bluetooth.manager.is_docker_env",
+            return_value=False,
+        ),
+        patch.object(type(manager), "is_operating_degraded", return_value=True),
+    ):
+        manager.on_scanner_start(scanner)
+
+        issue_id = f"bluetooth_adapter_missing_permissions_{scanner.source}"
+        assert issue_registry.async_get_issue(bluetooth.DOMAIN, issue_id) is None
+
+
+@pytest.mark.usefixtures("one_adapter")
+async def test_no_repair_issue_for_remote_scanner(
+    hass: HomeAssistant,
+    issue_registry: ir.IssueRegistry,
+) -> None:
+    """Test no repair issue is created for remote scanners."""
+    assert await async_setup_component(hass, bluetooth.DOMAIN, {})
+    await hass.async_block_till_done()
+
+    manager = _get_manager()
+
+    connector = HaBluetoothConnector(MockBleakClient, "mock_connector", lambda: False)
+    scanner = FakeRemoteScanner("remote_scanner", "esp32", connector, True)
+
+    with (
+        patch(
+            "homeassistant.components.bluetooth.manager.is_docker_env",
+            return_value=True,
+        ),
+        patch.object(type(manager), "is_operating_degraded", return_value=True),
+    ):
+        manager.on_scanner_start(scanner)
+
+        issues = [
+            issue
+            for issue in issue_registry.issues.values()
+            if issue.domain == bluetooth.DOMAIN
+            and "bluetooth_adapter_missing_permissions" in issue.issue_id
+        ]
+        assert len(issues) == 0
+
+
+@pytest.mark.usefixtures("one_adapter")
+async def test_repair_issue_created_for_passive_mode_fallback(
+    hass: HomeAssistant,
+    issue_registry: ir.IssueRegistry,
+) -> None:
+    """Test repair issue is created when scanner falls back to passive mode."""
+    assert await async_setup_component(hass, bluetooth.DOMAIN, {})
+    await hass.async_block_till_done()
+
+    manager = _get_manager()
+
+    scanner = HaScanner(
+        mode=BluetoothScanningMode.ACTIVE,
+        adapter="hci0",
+        address="00:11:22:33:44:55",
+    )
+    scanner.async_setup()
+
+    cancel = manager.async_register_scanner(scanner, connection_slots=1)
+
+    # Set scanner to passive mode when active was requested
+    scanner.set_requested_mode(BluetoothScanningMode.ACTIVE)
+    scanner.set_current_mode(BluetoothScanningMode.PASSIVE)
+
+    manager.on_scanner_start(scanner)
+
+    # Check repair issue is created
+    issue_id = f"bluetooth_adapter_passive_mode_{scanner.source}"
+    issue = issue_registry.async_get_issue(bluetooth.DOMAIN, issue_id)
+    assert issue is not None
+    assert issue.severity == ir.IssueSeverity.WARNING
+    # Should default to USB translation key when adapter type is unknown
+    assert issue.translation_key == "bluetooth_adapter_passive_mode_usb"
+    assert not issue.is_fixable
+
+    cancel()
+
+
+async def test_repair_issue_created_for_passive_mode_fallback_uart(
+    hass: HomeAssistant,
+    issue_registry: ir.IssueRegistry,
+) -> None:
+    """Test repair issue is created with UART-specific message for UART adapters."""
+    with patch(
+        "bluetooth_adapters.systems.linux.LinuxAdapters.adapters",
+        {
+            "hci0": {
+                "address": "00:11:22:33:44:55",
+                "sw_version": "homeassistant",
+                "hw_version": "uart:bcm2711",
+                "passive_scan": False,
+                "manufacturer": "Raspberry Pi",
+                "product": "BCM2711",
+                "adapter_type": "uart",  # UART adapter type
+            }
+        },
+    ):
+        assert await async_setup_component(hass, bluetooth.DOMAIN, {})
+        await hass.async_block_till_done()
+
+        manager = _get_manager()
+
+        scanner = HaScanner(
+            mode=BluetoothScanningMode.ACTIVE,
+            adapter="hci0",
+            address="00:11:22:33:44:55",
+        )
+        scanner.async_setup()
+
+        cancel = manager.async_register_scanner(scanner, connection_slots=1)
+
+        # Set scanner to passive mode when active was requested
+        scanner.set_requested_mode(BluetoothScanningMode.ACTIVE)
+        scanner.set_current_mode(BluetoothScanningMode.PASSIVE)
+
+        manager.on_scanner_start(scanner)
+
+        # Check repair issue is created with UART-specific translation key
+        issue_id = f"bluetooth_adapter_passive_mode_{scanner.source}"
+        issue = issue_registry.async_get_issue(bluetooth.DOMAIN, issue_id)
+        assert issue is not None
+        assert issue.severity == ir.IssueSeverity.WARNING
+        assert issue.translation_key == "bluetooth_adapter_passive_mode_uart"
+        assert not issue.is_fixable
+
+        cancel()
+
+
+@pytest.mark.usefixtures("one_adapter")
+async def test_repair_issue_deleted_when_passive_mode_resolved(
+    hass: HomeAssistant,
+    issue_registry: ir.IssueRegistry,
+) -> None:
+    """Test repair issue is deleted when scanner no longer in passive mode."""
+    assert await async_setup_component(hass, bluetooth.DOMAIN, {})
+    await hass.async_block_till_done()
+
+    manager = _get_manager()
+
+    scanner = HaScanner(
+        mode=BluetoothScanningMode.ACTIVE,
+        adapter="hci0",
+        address="00:11:22:33:44:55",
+    )
+    scanner.async_setup()
+
+    cancel = manager.async_register_scanner(scanner, connection_slots=1)
+
+    # Initially set scanner to passive mode when active was requested
+    scanner.set_requested_mode(BluetoothScanningMode.ACTIVE)
+    scanner.set_current_mode(BluetoothScanningMode.PASSIVE)
+
+    manager.on_scanner_start(scanner)
+
+    # Check repair issue is created
+    issue_id = f"bluetooth_adapter_passive_mode_{scanner.source}"
+    issue = issue_registry.async_get_issue(bluetooth.DOMAIN, issue_id)
+    assert issue is not None
+
+    # Now simulate scanner recovering to active mode
+    scanner.set_current_mode(BluetoothScanningMode.ACTIVE)
+    manager.on_scanner_start(scanner)
+
+    # Check repair issue is deleted
+    issue = issue_registry.async_get_issue(bluetooth.DOMAIN, issue_id)
+    assert issue is None
+
+    cancel()

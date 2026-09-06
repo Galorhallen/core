@@ -1,14 +1,20 @@
 """Platform for NASweb sensors."""
 
-from __future__ import annotations
-
 import logging
 import time
+from typing import override
 
 from webio_api import Input as NASwebInput, TempSensor
+from webio_api.const import (
+    STATE_INPUT_ACTIVE,
+    STATE_INPUT_NORMAL,
+    STATE_INPUT_PROBLEM,
+    STATE_INPUT_TAMPER,
+    STATE_INPUT_UNDEFINED,
+)
 
 from homeassistant.components.sensor import (
-    DOMAIN as DOMAIN_SENSOR,
+    DOMAIN as SENSOR_DOMAIN,
     SensorDeviceClass,
     SensorEntity,
     SensorStateClass,
@@ -28,11 +34,6 @@ from . import NASwebConfigEntry
 from .const import DOMAIN, KEY_TEMP_SENSOR, STATUS_UPDATE_MAX_TIME_INTERVAL
 
 SENSOR_INPUT_TRANSLATION_KEY = "sensor_input"
-STATE_UNDEFINED = "undefined"
-STATE_TAMPER = "tamper"
-STATE_ACTIVE = "active"
-STATE_NORMAL = "normal"
-STATE_PROBLEM = "problem"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -68,7 +69,7 @@ async def async_setup_entry(
         for index in removed:
             unique_id = f"{DOMAIN}.{config.unique_id}.input.{index}"
             if entity_id := entity_registry.async_get_entity_id(
-                DOMAIN_SENSOR, DOMAIN, unique_id
+                SENSOR_DOMAIN, DOMAIN, unique_id
             ):
                 entity_registry.async_remove(entity_id)
                 current_inputs.remove(index)
@@ -93,6 +94,7 @@ class BaseSensorEntity(SensorEntity, BaseCoordinatorEntity):
         self._attr_has_entity_name = True
         self._attr_should_poll = False
 
+    @override
     async def async_added_to_hass(self) -> None:
         """When entity is added to hass."""
         await super().async_added_to_hass()
@@ -109,11 +111,13 @@ class BaseSensorEntity(SensorEntity, BaseCoordinatorEntity):
         else:
             self._attr_available = available if available is not None else False
 
+    @override
     async def async_update(self) -> None:
         """Update the entity.
 
         Only used by the generic entity update service.
-        Scheduling updates is not necessary, the coordinator takes care of updates via push notifications.
+        Scheduling updates is not necessary, the coordinator
+        takes care of updates via push notifications.
         """
 
 
@@ -122,11 +126,11 @@ class InputStateSensor(BaseSensorEntity):
 
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_options: list[str] = [
-        STATE_UNDEFINED,
-        STATE_TAMPER,
-        STATE_ACTIVE,
-        STATE_NORMAL,
-        STATE_PROBLEM,
+        STATE_INPUT_ACTIVE,
+        STATE_INPUT_NORMAL,
+        STATE_INPUT_PROBLEM,
+        STATE_INPUT_TAMPER,
+        STATE_INPUT_UNDEFINED,
     ]
     _attr_translation_key = SENSOR_INPUT_TRANSLATION_KEY
 
@@ -141,13 +145,14 @@ class InputStateSensor(BaseSensorEntity):
         self._attr_native_value: str | None = None
         self._attr_translation_placeholders = {"index": f"{nasweb_input.index:2d}"}
         self._attr_unique_id = (
-            f"{DOMAIN}.{self._input.webio_serial}.input.{self._input.index}"
+            f"{DOMAIN}.{self._input.webio_serial}.input.{self._input.index}"  # pylint: disable=home-assistant-entity-unique-id-redundant-domain
         )
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, self._input.webio_serial)},
         )
 
     @callback
+    @override
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
         if self._input.state is None or self._input.state in self._attr_options:
@@ -174,12 +179,13 @@ class TemperatureSensor(BaseSensorEntity):
         """Initialize TemperatureSensor entity."""
         super().__init__(coordinator)
         self._temp_sensor = nasweb_temp_sensor
-        self._attr_unique_id = f"{DOMAIN}.{self._temp_sensor.webio_serial}.temp_sensor"
+        self._attr_unique_id = f"{DOMAIN}.{self._temp_sensor.webio_serial}.temp_sensor"  # pylint: disable=home-assistant-entity-unique-id-redundant-domain,home-assistant-entity-unique-id-redundant-platform
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, self._temp_sensor.webio_serial)}
         )
 
     @callback
+    @override
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
         self._attr_native_value = self._temp_sensor.value

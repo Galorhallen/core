@@ -1,14 +1,16 @@
 """Base entity for Open Router."""
 
-from __future__ import annotations
-
+import base64
 from collections.abc import AsyncGenerator, Callable
 import json
+from mimetypes import guess_file_type
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 import openai
 from openai.types.chat import (
     ChatCompletionAssistantMessageParam,
+    ChatCompletionContentPartImageParam,
     ChatCompletionFunctionToolParam,
     ChatCompletionMessage,
     ChatCompletionMessageFunctionToolCallParam,
@@ -20,20 +22,21 @@ from openai.types.chat import (
 from openai.types.chat.chat_completion_message_function_tool_call_param import Function
 from openai.types.shared_params import FunctionDefinition, ResponseFormatJSONSchema
 from openai.types.shared_params.response_format_json_schema import JSONSchema
+from probatio import to_openapi
 import voluptuous as vol
-from voluptuous_openapi import convert
 
 from homeassistant.components import conversation
 from homeassistant.config_entries import ConfigSubentry
 from homeassistant.const import CONF_MODEL
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr, llm
 from homeassistant.helpers.entity import Entity
+from homeassistant.helpers.json import json_dumps
 
 from . import OpenRouterConfigEntry
-from .const import DOMAIN, LOGGER
+from .const import CONF_WEB_SEARCH, DOMAIN, LOGGER
 
-# Max number of back and forth with the LLM to generate a response
 MAX_TOOL_ITERATIONS = 10
 
 
@@ -46,7 +49,6 @@ def _adjust_schema(schema: dict[str, Any]) -> None:
         if "required" not in schema:
             schema["required"] = []
 
-        # Ensure all properties are required
         for prop, prop_info in schema["properties"].items():
             _adjust_schema(prop_info)
             if prop not in schema["required"]:
@@ -68,7 +70,7 @@ def _format_structured_output(
         "name": name,
         "strict": True,
     }
-    result_schema = convert(
+    result_schema = to_openapi(
         schema,
         custom_serializer=(
             llm_api.custom_serializer if llm_api else llm.selector_serializer
@@ -86,9 +88,13 @@ def _format_tool(
     custom_serializer: Callable[[Any], Any] | None,
 ) -> ChatCompletionFunctionToolParam:
     """Format tool specification."""
+    unsupported_keys = {"oneOf", "anyOf", "allOf"}
+    schema = to_openapi(tool.parameters, custom_serializer=custom_serializer)
+    schema = {k: v for k, v in schema.items() if k not in unsupported_keys}
+
     tool_spec = FunctionDefinition(
         name=tool.name,
-        parameters=convert(tool.parameters, custom_serializer=custom_serializer),
+        parameters=schema,
     )
     if tool.description:
         tool_spec["description"] = tool.description
@@ -104,7 +110,7 @@ def _convert_content_to_chat_message(
         return ChatCompletionToolMessageParam(
             role="tool",
             tool_call_id=content.tool_call_id,
-            content=json.dumps(content.tool_result),
+            content=json_dumps(content.tool_result),
         )
 
     role: Literal["user", "assistant", "system"] = content.role
@@ -125,7 +131,7 @@ def _convert_content_to_chat_message(
                     type="function",
                     id=tool_call.id,
                     function=Function(
-                        arguments=json.dumps(tool_call.tool_args),
+                        arguments=json_dumps(tool_call.tool_args),
                         name=tool_call.tool_name,
                     ),
                 )
@@ -165,6 +171,43 @@ async def _transform_response(
     yield data
 
 
+async def async_prepare_files_for_prompt(
+    hass: HomeAssistant, files: list[tuple[Path, str | None]]
+) -> list[ChatCompletionContentPartImageParam]:
+    """Append files to a prompt.
+
+    Caller needs to ensure that the files are allowed.
+    """
+
+    def append_files_to_content() -> list[ChatCompletionContentPartImageParam]:
+        content: list[ChatCompletionContentPartImageParam] = []
+
+        for file_path, mime_type in files:
+            if not file_path.exists():
+                raise HomeAssistantError(f"`{file_path}` does not exist")
+
+            if mime_type is None:
+                mime_type = guess_file_type(file_path)[0]
+
+            if not mime_type or not mime_type.startswith(("image/", "application/pdf")):
+                raise HomeAssistantError(
+                    "Only images and PDF are supported by the OpenRouter API, "
+                    f"`{file_path}` is not an image file or PDF"
+                )
+
+            base64_file = base64.b64encode(file_path.read_bytes()).decode("utf-8")
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime_type};base64,{base64_file}"},
+                }
+            )
+
+        return content
+
+    return await hass.async_add_executor_job(append_files_to_content)
+
+
 class OpenRouterEntity(Entity):
     """Base entity for Open Router."""
 
@@ -190,31 +233,102 @@ class OpenRouterEntity(Entity):
     ) -> None:
         """Generate an answer for the chat log."""
 
+        model = self.model
+
+        extra_body: dict[str, Any] = {"require_parameters": True}
+
+        tools: list[ChatCompletionFunctionToolParam | dict[str, Any]] = []
+        if chat_log.llm_api:
+            tools.extend(
+                [
+                    _format_tool(tool, chat_log.llm_api.custom_serializer)
+                    for tool in chat_log.llm_api.tools
+                ]
+            )
+
+        match self.subentry.data.get(CONF_WEB_SEARCH):
+            case "plugin":
+                model += ":online"
+                LOGGER.debug("Using plugin web search mode: %s", model)
+            case "tool":
+                tools.append(
+                    {"type": "openrouter:web_search", "parameters": {"engine": "auto"}}
+                )
+                LOGGER.debug("Using auto tool web search mode: %s", model)
+            case "tool_native":
+                tools.append(
+                    {
+                        "type": "openrouter:web_search",
+                        "parameters": {"engine": "native"},
+                    }
+                )
+                LOGGER.debug("Using native tool web search mode: %s", model)
+            case "tool_exa":
+                tools.append(
+                    {"type": "openrouter:web_search", "parameters": {"engine": "exa"}}
+                )
+                LOGGER.debug("Using Exa tool web search mode: %s", model)
+            case "tool_firecrawl":
+                tools.append(
+                    {
+                        "type": "openrouter:web_search",
+                        "parameters": {"engine": "firecrawl"},
+                    }
+                )
+                LOGGER.debug("Using Firecrawl tool web search mode: %s", model)
+            case "tool_parallel":
+                tools.append(
+                    {
+                        "type": "openrouter:web_search",
+                        "parameters": {"engine": "parallel"},
+                    }
+                )
+                LOGGER.debug("Using Parallel tool web search mode: %s", model)
+            case "tool_perplexity":
+                tools.append(
+                    {
+                        "type": "openrouter:web_search",
+                        "parameters": {"engine": "perplexity"},
+                    }
+                )
+                LOGGER.debug("Using Perplexity tool web search mode: %s", model)
+
+        if tools:
+            extra_body["tools"] = tools
+
         model_args = {
-            "model": self.model,
+            "model": model,
             "user": chat_log.conversation_id,
             "extra_headers": {
                 "X-Title": "Home Assistant",
                 "HTTP-Referer": "https://www.home-assistant.io/integrations/open_router",
             },
-            "extra_body": {"require_parameters": True},
+            "extra_body": extra_body,
         }
-
-        tools: list[ChatCompletionFunctionToolParam] | None = None
-        if chat_log.llm_api:
-            tools = [
-                _format_tool(tool, chat_log.llm_api.custom_serializer)
-                for tool in chat_log.llm_api.tools
-            ]
-
-        if tools:
-            model_args["tools"] = tools
 
         model_args["messages"] = [
             m
             for content in chat_log.content
             if (m := _convert_content_to_chat_message(content))
         ]
+
+        last_content = chat_log.content[-1]
+
+        # Handle attachments by adding them to the last user message
+        if last_content.role == "user" and last_content.attachments:
+            last_message: ChatCompletionMessageParam = model_args["messages"][-1]
+            assert last_message["role"] == "user" and isinstance(
+                last_message["content"], str
+            )
+            # Encode files with base64 and append them to the text prompt
+            files = await async_prepare_files_for_prompt(
+                self.hass,
+                [(a.path, a.mime_type) for a in last_content.attachments],
+            )
+            last_message["content"] = [
+                {"type": "text", "text": last_message["content"]},
+                *files,
+            ]
 
         if structure:
             if TYPE_CHECKING:
@@ -234,6 +348,10 @@ class OpenRouterEntity(Entity):
             except openai.OpenAIError as err:
                 LOGGER.error("Error talking to API: %s", err)
                 raise HomeAssistantError("Error talking to API") from err
+
+            if not result.choices:
+                LOGGER.error("API returned empty choices")
+                raise HomeAssistantError("API returned empty response")
 
             result_message = result.choices[0].message
 

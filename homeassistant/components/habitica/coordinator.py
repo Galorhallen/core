@@ -1,14 +1,13 @@
 """DataUpdateCoordinator for the Habitica integration."""
 
-from __future__ import annotations
-
 from abc import abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from io import BytesIO
 import logging
-from typing import Any
+from typing import Any, override
+from uuid import UUID
 
 from aiohttp import ClientError
 from habiticalib import (
@@ -48,6 +47,14 @@ class HabiticaData:
     tasks: list[TaskData]
 
 
+@dataclass
+class HabiticaPartyData:
+    """Habitica party data."""
+
+    party: GroupData
+    members: dict[UUID, UserData]
+
+
 type HabiticaConfigEntry = ConfigEntry[HabiticaDataUpdateCoordinator]
 
 
@@ -81,6 +88,7 @@ class HabiticaBaseCoordinator[_DataT](DataUpdateCoordinator[_DataT]):
     async def _update_data(self) -> _DataT:
         """Fetch data."""
 
+    @override
     async def _async_update_data(self) -> _DataT:
         """Fetch the latest party data."""
 
@@ -109,6 +117,7 @@ class HabiticaDataUpdateCoordinator(HabiticaBaseCoordinator[HabiticaData]):
     _update_interval = timedelta(seconds=30)
     content: ContentData
 
+    @override
     async def _async_setup(self) -> None:
         """Set up Habitica integration."""
 
@@ -141,6 +150,7 @@ class HabiticaDataUpdateCoordinator(HabiticaBaseCoordinator[HabiticaData]):
                 translation_placeholders={"reason": str(e)},
             ) from e
 
+    @override
     async def _update_data(self) -> HabiticaData:
         """Fetch the latest data."""
 
@@ -192,11 +202,22 @@ class HabiticaDataUpdateCoordinator(HabiticaBaseCoordinator[HabiticaData]):
         return png.getvalue()
 
 
-class HabiticaPartyCoordinator(HabiticaBaseCoordinator[GroupData]):
+class HabiticaPartyCoordinator(HabiticaBaseCoordinator[HabiticaPartyData]):
     """Habitica Party Coordinator."""
 
     _update_interval = timedelta(minutes=15)
 
-    async def _update_data(self) -> GroupData:
+    @override
+    async def _update_data(self) -> HabiticaPartyData:
         """Fetch the latest party data."""
-        return (await self.habitica.get_group()).data
+
+        return HabiticaPartyData(
+            party=(await self.habitica.get_group()).data,
+            members={
+                member.id: member
+                for member in (
+                    await self.habitica.get_group_members(public_fields=True)
+                ).data
+                if member.id
+            },
+        )

@@ -1,9 +1,8 @@
 """Support for the World Air Quality Index service."""
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import override
 
 from aiowaqi import WAQIAirQuality
 from aiowaqi.models import Pollutant
@@ -130,12 +129,15 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up the WAQI sensor."""
-    coordinator = entry.runtime_data
-    async_add_entities(
-        WaqiSensor(coordinator, sensor)
-        for sensor in SENSORS
-        if sensor.available_fn(coordinator.data)
-    )
+    for subentry_id, coordinator in entry.runtime_data.items():
+        async_add_entities(
+            (
+                WaqiSensor(coordinator, sensor)
+                for sensor in SENSORS
+                if sensor.available_fn(coordinator.data)
+            ),
+            config_subentry_id=subentry_id,
+        )
 
 
 class WaqiSensor(CoordinatorEntity[WAQIDataUpdateCoordinator], SensorEntity):
@@ -163,6 +165,7 @@ class WaqiSensor(CoordinatorEntity[WAQIDataUpdateCoordinator], SensorEntity):
         )
 
     @property
+    @override
     def native_value(self) -> StateType:
         """Return the state of the device."""
         return self.entity_description.value_fn(self.coordinator.data)

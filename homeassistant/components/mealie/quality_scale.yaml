@@ -8,9 +8,15 @@ rules:
   config-flow: done
   dependency-transparency: done
   docs-actions: done
+  docs-conditions:
+    status: exempt
+    comment: This integration does not have any conditions.
   docs-high-level-description: done
   docs-installation-instructions: done
   docs-removal-instructions: done
+  docs-triggers:
+    status: exempt
+    comment: This integration does not have any triggers.
   entity-event-setup:
     status: exempt
     comment: |
@@ -39,15 +45,21 @@ rules:
   # Gold
   devices: done
   diagnostics: done
-  discovery-update-info: todo
-  discovery: todo
+  discovery-update-info:
+    status: exempt
+    comment: |
+      This integration will only discover a Mealie addon that is local, not on the network.
+  discovery:
+    status: done
+    comment: |
+      The integration will discover a Mealie addon posting a discovery message.
   docs-data-update: done
   docs-examples: done
-  docs-known-limitations: todo
-  docs-supported-devices: todo
+  docs-known-limitations: done
+  docs-supported-devices: done
   docs-supported-functions: done
-  docs-troubleshooting: todo
-  docs-use-cases: todo
+  docs-troubleshooting: done
+  docs-use-cases: done
   dynamic-devices:
     status: done
     comment: |

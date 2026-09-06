@@ -1,20 +1,16 @@
 """TOLO Sauna switch controls."""
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, override
 
 from tololib import ToloClient, ToloStatus
 
 from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import DOMAIN
-from .coordinator import ToloSaunaUpdateCoordinator
+from .coordinator import ToloConfigEntry, ToloSaunaUpdateCoordinator
 from .entity import ToloSaunaCoordinatorEntity
 
 
@@ -44,11 +40,11 @@ SWITCHES = (
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: ToloConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up switch controls for TOLO Sauna."""
-    coordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator = entry.runtime_data
     async_add_entities(
         ToloSwitchEntity(coordinator, entry, description) for description in SWITCHES
     )
@@ -62,7 +58,7 @@ class ToloSwitchEntity(ToloSaunaCoordinatorEntity, SwitchEntity):
     def __init__(
         self,
         coordinator: ToloSaunaUpdateCoordinator,
-        entry: ConfigEntry,
+        entry: ToloConfigEntry,
         entity_description: ToloSwitchEntityDescription,
     ) -> None:
         """Initialize TOLO switch entity."""
@@ -71,14 +67,17 @@ class ToloSwitchEntity(ToloSaunaCoordinatorEntity, SwitchEntity):
         self._attr_unique_id = f"{entry.entry_id}_{entity_description.key}"
 
     @property
+    @override
     def is_on(self) -> bool:
         """Return if the switch is currently on."""
         return self.entity_description.getter(self.coordinator.data.status)
 
+    @override
     def turn_on(self, **kwargs: Any) -> None:
         """Turn the switch on."""
         self.entity_description.setter(self.coordinator.client, True)
 
+    @override
     def turn_off(self, **kwargs: Any) -> None:
         """Turn the switch off."""
         self.entity_description.setter(self.coordinator.client, False)

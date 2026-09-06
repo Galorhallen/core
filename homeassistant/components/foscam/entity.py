@@ -1,7 +1,5 @@
 """Component providing basic support for Foscam IP cameras."""
 
-from __future__ import annotations
-
 from homeassistant.const import ATTR_HW_VERSION, ATTR_MODEL, ATTR_SW_VERSION
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -12,6 +10,8 @@ from .coordinator import FoscamCoordinator
 
 class FoscamEntity(CoordinatorEntity[FoscamCoordinator]):
     """Base entity for Foscam camera."""
+
+    _attr_has_entity_name = True
 
     def __init__(self, coordinator: FoscamCoordinator, config_entry_id: str) -> None:
         """Initialize the base Foscam entity."""

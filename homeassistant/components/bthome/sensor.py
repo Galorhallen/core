@@ -1,8 +1,6 @@
 """Support for BTHome sensors."""
 
-from __future__ import annotations
-
-from typing import cast
+from typing import cast, override
 
 from bthome_ble import SensorDeviceClass as BTHomeSensorDeviceClass, SensorUpdate, Units
 from bthome_ble.const import (
@@ -20,14 +18,13 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.const import (
-    CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
-    CONCENTRATION_PARTS_PER_MILLION,
     DEGREE,
     LIGHT_LUX,
-    PERCENTAGE,
+    REVOLUTIONS_PER_MINUTE,
     SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
     EntityCategory,
     UnitOfConductivity,
+    UnitOfDensity,
     UnitOfElectricCurrent,
     UnitOfElectricPotential,
     UnitOfEnergy,
@@ -35,6 +32,7 @@ from homeassistant.const import (
     UnitOfMass,
     UnitOfPower,
     UnitOfPressure,
+    UnitOfRatio,
     UnitOfSpeed,
     UnitOfTemperature,
     UnitOfTime,
@@ -58,12 +56,13 @@ SENSOR_DESCRIPTIONS = {
         key=f"{BTHomeSensorDeviceClass.ACCELERATION}_{Units.ACCELERATION_METERS_PER_SQUARE_SECOND}",
         native_unit_of_measurement=Units.ACCELERATION_METERS_PER_SQUARE_SECOND,
         state_class=SensorStateClass.MEASUREMENT,
+        translation_key="acceleration",
     ),
     # Battery (percent)
     (BTHomeSensorDeviceClass.BATTERY, Units.PERCENTAGE): SensorEntityDescription(
         key=f"{BTHomeSensorDeviceClass.BATTERY}_{Units.PERCENTAGE}",
         device_class=SensorDeviceClass.BATTERY,
-        native_unit_of_measurement=PERCENTAGE,
+        native_unit_of_measurement=UnitOfRatio.PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
@@ -71,6 +70,7 @@ SENSOR_DESCRIPTIONS = {
     (BTHomeExtendedSensorDeviceClass.CHANNEL, None): SensorEntityDescription(
         key=str(BTHomeExtendedSensorDeviceClass.CHANNEL),
         state_class=SensorStateClass.MEASUREMENT,
+        translation_key="channel",
     ),
     # Conductivity (μS/cm)
     (
@@ -86,6 +86,7 @@ SENSOR_DESCRIPTIONS = {
     (BTHomeSensorDeviceClass.COUNT, None): SensorEntityDescription(
         key=str(BTHomeSensorDeviceClass.COUNT),
         state_class=SensorStateClass.MEASUREMENT,
+        translation_key="count",
     ),
     # CO2 (parts per million)
     (
@@ -94,7 +95,7 @@ SENSOR_DESCRIPTIONS = {
     ): SensorEntityDescription(
         key=f"{BTHomeSensorDeviceClass.CO2}_{Units.CONCENTRATION_PARTS_PER_MILLION}",
         device_class=SensorDeviceClass.CO2,
-        native_unit_of_measurement=CONCENTRATION_PARTS_PER_MILLION,
+        native_unit_of_measurement=UnitOfRatio.PARTS_PER_MILLION,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     # Current (Ampere)
@@ -113,12 +114,14 @@ SENSOR_DESCRIPTIONS = {
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         state_class=SensorStateClass.MEASUREMENT,
+        translation_key="dew_point",
     ),
     # Directions (°)
     (BTHomeExtendedSensorDeviceClass.DIRECTION, Units.DEGREE): SensorEntityDescription(
         key=f"{BTHomeExtendedSensorDeviceClass.DIRECTION}_{Units.DEGREE}",
         native_unit_of_measurement=DEGREE,
         state_class=SensorStateClass.MEASUREMENT,
+        translation_key="direction",
     ),
     # Distance (mm)
     (
@@ -172,12 +175,13 @@ SENSOR_DESCRIPTIONS = {
         key=f"{BTHomeSensorDeviceClass.GYROSCOPE}_{Units.GYROSCOPE_DEGREES_PER_SECOND}",
         native_unit_of_measurement=Units.GYROSCOPE_DEGREES_PER_SECOND,
         state_class=SensorStateClass.MEASUREMENT,
+        translation_key="gyroscope",
     ),
     # Humidity in (percent)
     (BTHomeSensorDeviceClass.HUMIDITY, Units.PERCENTAGE): SensorEntityDescription(
         key=f"{BTHomeSensorDeviceClass.HUMIDITY}_{Units.PERCENTAGE}",
         device_class=SensorDeviceClass.HUMIDITY,
-        native_unit_of_measurement=PERCENTAGE,
+        native_unit_of_measurement=UnitOfRatio.PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     # Illuminance (lux)
@@ -186,6 +190,12 @@ SENSOR_DESCRIPTIONS = {
         device_class=SensorDeviceClass.ILLUMINANCE,
         native_unit_of_measurement=LIGHT_LUX,
         state_class=SensorStateClass.MEASUREMENT,
+    ),
+    # Light level (-)
+    (BTHomeExtendedSensorDeviceClass.LIGHT_LEVEL, None): SensorEntityDescription(
+        key=str(BTHomeExtendedSensorDeviceClass.LIGHT_LEVEL),
+        state_class=SensorStateClass.MEASUREMENT,
+        translation_key="light_level",
     ),
     # Mass sensor (kg)
     (BTHomeSensorDeviceClass.MASS, Units.MASS_KILOGRAMS): SensorEntityDescription(
@@ -205,7 +215,7 @@ SENSOR_DESCRIPTIONS = {
     (BTHomeSensorDeviceClass.MOISTURE, Units.PERCENTAGE): SensorEntityDescription(
         key=f"{BTHomeSensorDeviceClass.MOISTURE}_{Units.PERCENTAGE}",
         device_class=SensorDeviceClass.MOISTURE,
-        native_unit_of_measurement=PERCENTAGE,
+        native_unit_of_measurement=UnitOfRatio.PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     # Packet Id (-)
@@ -214,6 +224,7 @@ SENSOR_DESCRIPTIONS = {
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
+        translation_key="packet_id",
     ),
     # PM10 (μg/m3)
     (
@@ -222,7 +233,7 @@ SENSOR_DESCRIPTIONS = {
     ): SensorEntityDescription(
         key=f"{BTHomeSensorDeviceClass.PM10}_{Units.CONCENTRATION_MICROGRAMS_PER_CUBIC_METER}",
         device_class=SensorDeviceClass.PM10,
-        native_unit_of_measurement=CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        native_unit_of_measurement=UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     # PM2.5 (μg/m3)
@@ -232,7 +243,7 @@ SENSOR_DESCRIPTIONS = {
     ): SensorEntityDescription(
         key=f"{BTHomeSensorDeviceClass.PM25}_{Units.CONCENTRATION_MICROGRAMS_PER_CUBIC_METER}",
         device_class=SensorDeviceClass.PM25,
-        native_unit_of_measurement=CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        native_unit_of_measurement=UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     # Power (Watt)
@@ -262,12 +273,30 @@ SENSOR_DESCRIPTIONS = {
     # Raw (-)
     (BTHomeExtendedSensorDeviceClass.RAW, None): SensorEntityDescription(
         key=str(BTHomeExtendedSensorDeviceClass.RAW),
+        translation_key="raw",
     ),
     # Rotation (°)
     (BTHomeSensorDeviceClass.ROTATION, Units.DEGREE): SensorEntityDescription(
         key=f"{BTHomeSensorDeviceClass.ROTATION}_{Units.DEGREE}",
         native_unit_of_measurement=DEGREE,
         state_class=SensorStateClass.MEASUREMENT,
+        translation_key="rotation",
+    ),
+    # Rotational speed (rpm)
+    (
+        BTHomeExtendedSensorDeviceClass.ROTATIONAL_SPEED,
+        Units.REVOLUTIONS_PER_MINUTE,
+    ): SensorEntityDescription(
+        key=f"{BTHomeExtendedSensorDeviceClass.ROTATIONAL_SPEED}_{Units.REVOLUTIONS_PER_MINUTE}",
+        native_unit_of_measurement=REVOLUTIONS_PER_MINUTE,
+        state_class=SensorStateClass.MEASUREMENT,
+        translation_key="rotational_speed",
+    ),
+    # Settings revision (-)
+    (BTHomeExtendedSensorDeviceClass.SETTINGS_REVISION, None): SensorEntityDescription(
+        key=str(BTHomeExtendedSensorDeviceClass.SETTINGS_REVISION),
+        entity_category=EntityCategory.DIAGNOSTIC,
+        translation_key="settings_revision",
     ),
     # Signal Strength (RSSI) (dB)
     (
@@ -301,6 +330,7 @@ SENSOR_DESCRIPTIONS = {
     # Text (-)
     (BTHomeExtendedSensorDeviceClass.TEXT, None): SensorEntityDescription(
         key=str(BTHomeExtendedSensorDeviceClass.TEXT),
+        translation_key="text",
     ),
     # Timestamp (datetime object)
     (
@@ -317,6 +347,7 @@ SENSOR_DESCRIPTIONS = {
     ): SensorEntityDescription(
         key=str(BTHomeSensorDeviceClass.UV_INDEX),
         state_class=SensorStateClass.MEASUREMENT,
+        translation_key="uv_index",
     ),
     # Volatile organic Compounds (VOC) (μg/m3)
     (
@@ -325,7 +356,7 @@ SENSOR_DESCRIPTIONS = {
     ): SensorEntityDescription(
         key=f"{BTHomeSensorDeviceClass.VOLATILE_ORGANIC_COMPOUNDS}_{Units.CONCENTRATION_MICROGRAMS_PER_CUBIC_METER}",
         device_class=SensorDeviceClass.VOLATILE_ORGANIC_COMPOUNDS,
-        native_unit_of_measurement=CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        native_unit_of_measurement=UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
         state_class=SensorStateClass.MEASUREMENT,
     ),
     # Voltage (volt)
@@ -413,10 +444,7 @@ def sensor_update_to_bluetooth_data_update(
             )
             for device_key, sensor_values in sensor_update.entity_values.items()
         },
-        entity_names={
-            device_key_to_bluetooth_entity_key(device_key): sensor_values.name
-            for device_key, sensor_values in sensor_update.entity_values.items()
-        },
+        entity_names={},
     )
 
 
@@ -447,11 +475,13 @@ class BTHomeBluetoothSensorEntity(
     """Representation of a BTHome BLE sensor."""
 
     @property
+    @override
     def native_value(self) -> int | float | None:
         """Return the native value."""
         return self.processor.entity_data.get(self.entity_key)
 
     @property
+    @override
     def available(self) -> bool:
         """Return True if entity is available."""
         return self.processor.coordinator.sleepy_device or super().available

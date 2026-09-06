@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 import logging
-from typing import Self
+from typing import Self, override
 
 from govee_local_api import GoveeController, GoveeDevice
 
@@ -59,10 +59,11 @@ class GoveeLocalApiConfig:
 class GoveeLocalApiCoordinator(DataUpdateCoordinator[list[GoveeDevice]]):
     """Govee light local coordinator."""
 
-    config_entry: GoveeLocalConfigEntry
-
     def __init__(
-        self, hass: HomeAssistant, config_entry: GoveeLocalConfigEntry
+        self,
+        hass: HomeAssistant,
+        config_entry: GoveeLocalConfigEntry,
+        source_ips: set[str],
     ) -> None:
         """Initialize my coordinator."""
         super().__init__(
@@ -77,52 +78,72 @@ class GoveeLocalApiCoordinator(DataUpdateCoordinator[list[GoveeDevice]]):
             config_entry
         )
 
-        self._controller = GoveeController(
-            loop=hass.loop,
-            logger=_LOGGER,
-            broadcast_address=CONF_MULTICAST_ADDRESS_DEFAULT,
-            broadcast_port=CONF_TARGET_PORT_DEFAULT,
-            listening_port=CONF_LISTENING_PORT_DEFAULT,
-            discovery_enabled=config.auto_discovery,
-            discovery_interval=CONF_DISCOVERY_INTERVAL_DEFAULT,
-            discovered_callback=None,
-            update_enabled=False,
-        )
+        self._controllers: list[GoveeController] = [
+            GoveeController(
+                loop=hass.loop,
+                logger=_LOGGER,
+                listening_addresses=source_ip,
+                broadcast_address=CONF_MULTICAST_ADDRESS_DEFAULT,
+                broadcast_port=CONF_TARGET_PORT_DEFAULT,
+                listening_port=CONF_LISTENING_PORT_DEFAULT,
+                discovery_enabled=config.auto_discovery,
+                discovery_interval=CONF_DISCOVERY_INTERVAL_DEFAULT,
+                discovered_callback=None,
+                update_enabled=False,
+            )
+            for source_ip in source_ips
+        ]
 
     async def start(self) -> None:
         """Start the Govee coordinator."""
-        await self._controller.start()
-        self._controller.send_update_message()
+
+        for controller in self._controllers:
+            await controller.start()
+            controller.send_update_message()
 
     async def set_discovery_callback(
         self, callback: Callable[[GoveeDevice, bool], bool]
     ) -> None:
         """Set discovery callback for automatic Govee light discovery."""
-        self._controller.set_device_discovered_callback(callback)
+
+        for controller in self._controllers:
+            controller.set_device_discovered_callback(callback)
 
     def enable_discovery(self, enable: bool) -> None:
         """Enable or disable automatic Govee light discovery."""
-        self._controller.set_discovery_enabled(enable)
+        for controller in self._controllers:
+            controller.set_discovery_enabled(enable)
 
     def add_device_to_discovery_queue(self, ip: str) -> bool:
         """Add a device by IP address to discovery queue."""
-        return self._controller.add_device_to_discovery_queue(ip)
+        # The device is reachable through only one of the source IPs, so queue
+        # it on every controller and report success if any of them accepted it.
+        return any(
+            controller.add_device_to_discovery_queue(ip)
+            for controller in self._controllers
+        )
 
     def remove_device_from_discovery_queue(self, ip: str) -> None:
         """Remove a device by IP address from manual discovery queue."""
-        self._controller.remove_device_from_discovery_queue(ip)
+        for controller in self._controllers:
+            controller.remove_device_from_discovery_queue(ip)
 
     def remove_device(self, device: GoveeDevice) -> None:
-        """Remove a device from the controller."""
-        self._controller.remove_device(device)
+        """Remove a device from the controllers."""
+        for controller in self._controllers:
+            controller.remove_device(device)
 
     def get_device_by_ip(self, ip: str) -> GoveeDevice | None:
         """Return a device by IP address."""
-        return self._controller.get_device_by_ip(ip)
+        for controller in self._controllers:
+            if device := controller.get_device_by_ip(ip):
+                return device
+        return None
 
-    def cleanup(self) -> asyncio.Event:
-        """Stop and cleanup the cooridinator."""
-        return self._controller.cleanup()
+    def cleanup(self) -> list[asyncio.Event]:
+        """Stop and cleanup the coordinator."""
+
+        return [controller.cleanup() for controller in self._controllers]
 
     async def turn_on(self, device: GoveeDevice) -> None:
         """Turn on the light."""
@@ -146,25 +167,34 @@ class GoveeLocalApiCoordinator(DataUpdateCoordinator[list[GoveeDevice]]):
         """Set light color in kelvin."""
         await device.set_temperature(temperature)
 
-    async def set_scene(self, device: GoveeController, scene: str) -> None:
+    async def set_scene(self, device: GoveeDevice, scene: str) -> None:
         """Set light scene."""
         await device.set_scene(scene)
 
     @property
     def devices(self) -> list[GoveeDevice]:
         """Return a list of discovered Govee devices."""
-        return self._controller.devices
+
+        devices: list[GoveeDevice] = []
+        for controller in self._controllers:
+            devices = devices + controller.devices
+        return devices
 
     @property
     def discovery_queue(self) -> set[str]:
         """Return a set of devices in the discovery queue."""
-        return self._controller.discovery_queue
+        queue: set[str] = set()
+        for controller in self._controllers:
+            queue |= controller.discovery_queue
+        return queue
 
     @property
     def discovery_enabled(self) -> bool:
         """Return if discovery is enabled."""
-        return self._controller.discovery
+        return any(controller.discovery for controller in self._controllers)
 
+    @override
     async def _async_update_data(self) -> list[GoveeDevice]:
-        self._controller.send_update_message()
-        return self._controller.devices
+        for controller in self._controllers:
+            controller.send_update_message()
+        return self.devices

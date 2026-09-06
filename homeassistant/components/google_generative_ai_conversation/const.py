@@ -2,7 +2,7 @@
 
 import logging
 
-from homeassistant.const import CONF_LLM_HASS_API
+from homeassistant.const import CONF_LLM_HASS_API, CONF_PROMPT
 from homeassistant.helpers import llm
 
 LOGGER = logging.getLogger(__package__)
@@ -15,14 +15,14 @@ DEFAULT_STT_NAME = "Google AI STT"
 DEFAULT_TTS_NAME = "Google AI TTS"
 DEFAULT_AI_TASK_NAME = "Google AI Task"
 
-CONF_PROMPT = "prompt"
 DEFAULT_STT_PROMPT = "Transcribe the attached audio"
 
 CONF_RECOMMENDED = "recommended"
 CONF_CHAT_MODEL = "chat_model"
-RECOMMENDED_CHAT_MODEL = "models/gemini-2.5-flash"
+RECOMMENDED_CHAT_MODEL = "models/gemini-3.1-flash-lite"
 RECOMMENDED_STT_MODEL = RECOMMENDED_CHAT_MODEL
-RECOMMENDED_TTS_MODEL = "models/gemini-2.5-flash-preview-tts"
+RECOMMENDED_TTS_MODEL = "models/gemini-3.1-flash-tts-preview"
+RECOMMENDED_IMAGE_MODEL = "models/gemini-2.5-flash-image"
 CONF_TEMPERATURE = "temperature"
 RECOMMENDED_TEMPERATURE = 1.0
 CONF_TOP_P = "top_p"
@@ -31,6 +31,8 @@ CONF_TOP_K = "top_k"
 RECOMMENDED_TOP_K = 64
 CONF_MAX_TOKENS = "max_tokens"
 RECOMMENDED_MAX_TOKENS = 3000
+# Input 5000, output 19400 = 0.05 USD
+RECOMMENDED_AI_TASK_MAX_TOKENS = 19400
 CONF_HARASSMENT_BLOCK_THRESHOLD = "harassment_block_threshold"
 CONF_HATE_BLOCK_THRESHOLD = "hate_block_threshold"
 CONF_SEXUAL_BLOCK_THRESHOLD = "sexual_block_threshold"
@@ -38,6 +40,10 @@ CONF_DANGEROUS_BLOCK_THRESHOLD = "dangerous_block_threshold"
 RECOMMENDED_HARM_BLOCK_THRESHOLD = "BLOCK_MEDIUM_AND_ABOVE"
 CONF_USE_GOOGLE_SEARCH_TOOL = "enable_google_search_tool"
 RECOMMENDED_USE_GOOGLE_SEARCH_TOOL = False
+CONF_THINKING_BUDGET = "thinking_budget"
+RECOMMENDED_THINKING_BUDGET = -1
+CONF_THINKING_LEVEL = "thinking_level"
+RECOMMENDED_THINKING_LEVEL = "auto"
 
 TIMEOUT_MILLIS = 10000
 FILE_POLLING_INTERVAL_SECONDS = 0.05

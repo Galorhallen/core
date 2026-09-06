@@ -1,6 +1,7 @@
 """Test Govee light local config flow."""
 
 from errno import EADDRINUSE
+from ipaddress import IPv4Address
 from unittest.mock import AsyncMock, patch
 
 from govee_local_api import GoveeDevice
@@ -105,7 +106,7 @@ async def test_creating_entry_has_no_devices(
     """Test setting up Govee with no devices."""
 
     set_mocked_devices(mock_govee_api, [])
-    mock_coordinator._controller = mock_govee_api
+    mock_coordinator._controllers = [mock_govee_api]
 
     with patch(
         "homeassistant.components.govee_light_local.config_flow.DISCOVERY_TIMEOUT",
@@ -140,22 +141,27 @@ async def test_creating_entry_with_devices(
 
     set_mocked_devices(mock_govee_api, _get_devices(mock_govee_api))
 
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": config_entries.SOURCE_USER}
-    )
-    assert result["type"] is FlowResultType.FORM
+    # Mock duplicated IPs to ensure that only one GoveeController is started
+    with patch(
+        "homeassistant.components.network.async_get_enabled_source_ips",
+        return_value=[IPv4Address("192.168.1.2"), IPv4Address("192.168.1.2")],
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        assert result["type"] is FlowResultType.FORM
 
-    # Auto Discovery selection
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {CONF_AUTO_DISCOVERY: True}
-    )
-    assert result["type"] is FlowResultType.FORM
+        # Auto Discovery selection
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_AUTO_DISCOVERY: True}
+        )
+        assert result["type"] is FlowResultType.FORM
 
-    # Confirmation form
-    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+        # Confirmation form
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+        assert result["type"] is FlowResultType.CREATE_ENTRY
 
-    await hass.async_block_till_done()
+        await hass.async_block_till_done()
 
     mock_govee_api.start.assert_awaited_once()
     mock_setup_entry.assert_awaited_once()

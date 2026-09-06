@@ -1,9 +1,7 @@
 """Config flow for Kodi integration."""
 
-from __future__ import annotations
-
 import logging
-from typing import Any
+from typing import Any, override
 
 from pykodi import CannotConnectError, InvalidAuthError, Kodi, get_kodi_connection
 import voluptuous as vol
@@ -102,6 +100,7 @@ class KodiConfigFlow(ConfigFlow, domain=DOMAIN):
         self._ssl: bool | None = DEFAULT_SSL
         self._discovery_name: str | None = None
 
+    @override
     async def async_step_zeroconf(
         self, discovery_info: ZeroconfServiceInfo
     ) -> ConfigFlowResult:
@@ -153,6 +152,7 @@ class KodiConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return self._create_entry()
 
+    @override
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -232,28 +232,6 @@ class KodiConfigFlow(ConfigFlow, domain=DOMAIN):
                 return self._create_entry()
 
         return self._show_ws_port_form(errors)
-
-    async def async_step_import(self, import_data: dict[str, Any]) -> ConfigFlowResult:
-        """Handle import from YAML."""
-        reason = None
-        try:
-            await validate_http(self.hass, import_data)
-            await validate_ws(self.hass, import_data)
-        except InvalidAuth:
-            _LOGGER.exception("Invalid Kodi credentials")
-            reason = "invalid_auth"
-        except CannotConnect:
-            _LOGGER.exception("Cannot connect to Kodi")
-            reason = "cannot_connect"
-        except Exception:
-            _LOGGER.exception("Unexpected exception")
-            reason = "unknown"
-        else:
-            return self.async_create_entry(
-                title=import_data[CONF_NAME], data=import_data
-            )
-
-        return self.async_abort(reason=reason)
 
     @callback
     def _show_credentials_form(

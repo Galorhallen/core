@@ -1,9 +1,9 @@
 """Application credentials platform for the Volvo integration."""
 
-from __future__ import annotations
+from typing import override
 
 from volvocarsapi.auth import AUTHORIZE_URL, TOKEN_URL
-from volvocarsapi.scopes import DEFAULT_SCOPES
+from volvocarsapi.scopes import ALL_SCOPES
 
 from homeassistant.components.application_credentials import ClientCredential
 from homeassistant.core import HomeAssistant
@@ -30,8 +30,9 @@ class VolvoOAuth2Implementation(LocalOAuth2ImplementationWithPkce):
     """Volvo oauth2 implementation."""
 
     @property
+    @override
     def extra_authorize_data(self) -> dict:
         """Extra data that needs to be appended to the authorize url."""
         return super().extra_authorize_data | {
-            "scope": " ".join(DEFAULT_SCOPES),
+            "scope": " ".join(ALL_SCOPES),
         }

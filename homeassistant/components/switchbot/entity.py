@@ -1,13 +1,11 @@
 """An abstract class common to all Switchbot entities."""
 
-from __future__ import annotations
-
 from collections.abc import Callable, Coroutine, Mapping
 import logging
-from typing import Any, Concatenate
+from typing import Any, Concatenate, override
 
-from switchbot import Switchbot, SwitchbotDevice
-from switchbot.devices.device import SwitchbotOperationError
+import switchbot
+from switchbot import Switchbot, SwitchbotDevice, SwitchbotOperationError
 
 from homeassistant.components.bluetooth.passive_update_coordinator import (
     PassiveBluetoothCoordinatorEntity,
@@ -43,9 +41,11 @@ class SwitchbotEntity(
         self._attr_device_info = DeviceInfo(
             connections={(dr.CONNECTION_BLUETOOTH, self._address)},
             manufacturer=MANUFACTURER,
-            model=coordinator.model,  # Sometimes the modelName is missing from the advertisement data
+            # Sometimes the modelName is missing from ads
+            model=coordinator.model,
             name=coordinator.device_name,
         )
+        self._channel: int | None = None
         if ":" not in self._address:
             # MacOS Bluetooth addresses are not mac addresses
             return
@@ -60,9 +60,12 @@ class SwitchbotEntity(
     @property
     def parsed_data(self) -> dict[str, Any]:
         """Return parsed device data for this entity."""
+        if isinstance(self.coordinator.device, switchbot.SwitchbotRelaySwitch2PM):
+            return self.coordinator.device.get_parsed_data(self._channel)
         return self.coordinator.device.parsed_data
 
     @property
+    @override
     def extra_state_attributes(self) -> Mapping[str, Any]:
         """Return the state attributes."""
         return {"last_run_success": self._last_run_success}
@@ -72,16 +75,19 @@ class SwitchbotEntity(
         """Update the entity attributes."""
 
     @callback
+    @override
     def _handle_coordinator_update(self) -> None:
         """Handle data update."""
         self._async_update_attrs()
         self.async_write_ha_state()
 
+    @override
     async def async_added_to_hass(self) -> None:
         """Register callbacks."""
         self.async_on_remove(self._device.subscribe(self._handle_coordinator_update))
         return await super().async_added_to_hass()
 
+    @override
     async def async_update(self) -> None:
         """Update the entity.
 
@@ -117,6 +123,7 @@ class SwitchbotSwitchedEntity(SwitchbotEntity, ToggleEntity):
     _device: Switchbot
 
     @exception_handler
+    @override
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn device on."""
         _LOGGER.debug("Turn Switchbot device on %s", self._address)
@@ -127,6 +134,7 @@ class SwitchbotSwitchedEntity(SwitchbotEntity, ToggleEntity):
         self.async_write_ha_state()
 
     @exception_handler
+    @override
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn device off."""
         _LOGGER.debug("Turn Switchbot device off %s", self._address)

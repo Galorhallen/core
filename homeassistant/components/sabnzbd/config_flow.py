@@ -1,9 +1,7 @@
 """Adds config flow for SabNzbd."""
 
-from __future__ import annotations
-
 import logging
-from typing import Any
+from typing import Any, override
 
 import voluptuous as vol
 import yarl
@@ -53,6 +51,7 @@ class SABnzbdConfigFlow(ConfigFlow, domain=DOMAIN):
         """Handle reconfiguration flow."""
         return await self.async_step_user(user_input)
 
+    @override
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -90,4 +89,8 @@ class SABnzbdConfigFlow(ConfigFlow, domain=DOMAIN):
                 else user_input,
             ),
             errors=errors,
+            description_placeholders={
+                "sabnzbd_full_url_local": "http://localhost:8080",
+                "sabnzbd_full_url_addon": "http://a02368d7-sabnzbd:8080",
+            },
         )

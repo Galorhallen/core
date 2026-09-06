@@ -1,7 +1,5 @@
 """Data UpdateCoordinator for the Husqvarna Automower integration."""
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Callable
 from datetime import datetime, timedelta
@@ -28,7 +26,7 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 MAX_WS_RECONNECT_TIME = 600
-SCAN_INTERVAL = timedelta(minutes=8)
+SCAN_INTERVAL = timedelta(minutes=1)
 DEFAULT_RECONNECT_TIME = 2  # Define a default reconnect time
 PING_INTERVAL = 60
 
@@ -55,7 +53,6 @@ class AutomowerDataUpdateCoordinator(DataUpdateCoordinator[MowerDictionary]):
             update_interval=SCAN_INTERVAL,
         )
         self.api = api
-        self.ws_connected: bool = False
         self.reconnect_time = DEFAULT_RECONNECT_TIME
         self.new_devices_callbacks: list[Callable[[set[str]], None]] = []
         self.new_zones_callbacks: list[Callable[[str, set[str]], None]] = []
@@ -71,31 +68,33 @@ class AutomowerDataUpdateCoordinator(DataUpdateCoordinator[MowerDictionary]):
         self._on_data_update()
         super().async_update_listeners()
 
+    @override
+    async def _async_setup(self) -> None:
+        """Initialize websocket connection and callbacks."""
+        await self.api.connect()
+        self.api.register_data_callback(self.handle_websocket_updates)
+
+        def start_watchdog() -> None:
+            if self._watchdog_task is not None and not self._watchdog_task.done():
+                _LOGGER.debug("Cancelling previous watchdog task")
+                self._watchdog_task.cancel()
+            self._watchdog_task = self.config_entry.async_create_background_task(
+                self.hass,
+                self._pong_watchdog(),
+                "websocket_watchdog",
+            )
+
+        self.api.register_ws_ready_callback(start_watchdog)
+
+    @override
     async def _async_update_data(self) -> MowerDictionary:
-        """Subscribe for websocket and poll data from the API."""
-        if not self.ws_connected:
-            await self.api.connect()
-            self.api.register_data_callback(self.handle_websocket_updates)
-            self.ws_connected = True
-
-            def start_watchdog() -> None:
-                if self._watchdog_task is not None and not self._watchdog_task.done():
-                    _LOGGER.debug("Cancelling previous watchdog task")
-                    self._watchdog_task.cancel()
-                self._watchdog_task = self.config_entry.async_create_background_task(
-                    self.hass,
-                    self._pong_watchdog(),
-                    "websocket_watchdog",
-                )
-
-            self.api.register_ws_ready_callback(start_watchdog)
+        """Poll data from the API."""
         try:
-            data = await self.api.get_status()
+            return await self.api.get_status()
         except ApiError as err:
             raise UpdateFailed(err) from err
         except AuthError as err:
             raise ConfigEntryAuthFailed(err) from err
-        return data
 
     @callback
     def _on_data_update(self) -> None:
@@ -146,6 +145,7 @@ class AutomowerDataUpdateCoordinator(DataUpdateCoordinator[MowerDictionary]):
         self.async_set_updated_data(ws_data)
 
     @callback
+    @override
     def async_set_updated_data(self, data: MowerDictionary) -> None:
         """Override DataUpdateCoordinator to preserve fixed polling interval.
 
@@ -183,20 +183,10 @@ class AutomowerDataUpdateCoordinator(DataUpdateCoordinator[MowerDictionary]):
                 "Failed to listen to websocket. Trying to reconnect: %s",
                 err,
             )
-        if not hass.is_stopping:
-            await asyncio.sleep(self.reconnect_time)
-            self.reconnect_time = min(self.reconnect_time * 2, MAX_WS_RECONNECT_TIME)
-            entry.async_create_background_task(
-                hass,
-                self.client_listen(hass, entry, automower_client),
-                "reconnect_task",
-            )
 
     def _should_poll(self) -> bool:
-        """Return True if at least one mower is connected and at least one is not OFF."""
-        return any(mower.metadata.connected for mower in self.data.values()) and any(
-            mower.mower.state != MowerStates.OFF for mower in self.data.values()
-        )
+        """Return True if at least one mower is not OFF."""
+        return any(mower.mower.state != MowerStates.OFF for mower in self.data.values())
 
     async def _pong_watchdog(self) -> None:
         """Watchdog to check for pong messages."""
@@ -228,8 +218,8 @@ class AutomowerDataUpdateCoordinator(DataUpdateCoordinator[MowerDictionary]):
 
         registered_devices: set[str] = {
             str(mower_id)
-            for device in device_registry.devices.get_devices_for_config_entry_id(
-                self.config_entry.entry_id
+            for device in dr.async_entries_for_config_entry(
+                device_registry, self.config_entry.entry_id
             )
             for domain, mower_id in device.identifiers
             if domain == DOMAIN
@@ -240,12 +230,11 @@ class AutomowerDataUpdateCoordinator(DataUpdateCoordinator[MowerDictionary]):
             _LOGGER.debug("Removing orphaned devices: %s", orphaned_devices)
             device_registry = dr.async_get(self.hass)
             for mower_id in orphaned_devices:
-                dev = device_registry.async_get_device(identifiers={(DOMAIN, mower_id)})
+                dev = device_registry.async_get_device_by_identifier(
+                    (DOMAIN, mower_id), self.config_entry.entry_id
+                )
                 if dev is not None:
-                    device_registry.async_update_device(
-                        device_id=dev.id,
-                        remove_config_entry_id=self.config_entry.entry_id,
-                    )
+                    device_registry.async_remove_device(dev.id)
 
         new_devices = current_devices - registered_devices
         if new_devices:
@@ -260,6 +249,7 @@ class AutomowerDataUpdateCoordinator(DataUpdateCoordinator[MowerDictionary]):
             for mower_id, mower_data in self.data.items()
             if mower_data.capabilities.stay_out_zones
             and mower_data.stay_out_zones is not None
+            and mower_data.stay_out_zones.zones is not None
         }
 
         entity_registry = er.async_get(self.hass)

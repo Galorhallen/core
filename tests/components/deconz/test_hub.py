@@ -30,8 +30,8 @@ async def test_device_registry_entry(
     snapshot: SnapshotAssertion,
 ) -> None:
     """Successful setup."""
-    device_entry = device_registry.async_get_device(
-        identifiers={(DOMAIN, config_entry_setup.unique_id)}
+    device_entry = device_registry.async_get_device_by_identifier(
+        (DOMAIN, config_entry_setup.unique_id), config_entry_setup.entry_id
     )
     assert device_entry == snapshot
 
@@ -76,7 +76,7 @@ async def test_update_address(
         patch(
             "homeassistant.components.deconz.async_setup_entry",
             return_value=True,
-        ) as mock_setup_entry,
+        ),
         patch("pydeconz.gateway.WSClient") as ws_mock,
     ):
         await hass.config_entries.flow.async_init(
@@ -97,4 +97,3 @@ async def test_update_address(
 
     assert ws_mock.call_args[0][1] == "2.3.4.5"
     assert config_entry_setup.data["host"] == "2.3.4.5"
-    assert len(mock_setup_entry.mock_calls) == 1

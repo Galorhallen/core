@@ -1,14 +1,12 @@
 """Platform for Miele integration."""
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from dataclasses import dataclass
 import logging
-from typing import Any, Final, cast
+from typing import Any, Final, cast, override
 
-import aiohttp
-from pymiele import MieleDevice
+from aiohttp import ClientResponseError
+from pymiele import MieleDevice, MieleTemperature
 
 from homeassistant.components.climate import (
     ClimateEntity,
@@ -29,6 +27,15 @@ from .entity import MieleEntity
 PARALLEL_UPDATES = 1
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _get_temperature_value(
+    temperatures: list[MieleTemperature], index: int
+) -> float | None:
+    """Return the temperature value for the given index."""
+    if len(temperatures) > index:
+        return cast(int, temperatures[index].temperature) / 100.0
+    return None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -62,11 +69,10 @@ CLIMATE_TYPES: Final[tuple[MieleClimateDefinition, ...]] = (
         description=MieleClimateDescription(
             key="thermostat",
             value_fn=(
-                lambda value: cast(int, value.state_temperatures[0].temperature) / 100.0
+                lambda value: _get_temperature_value(value.state_temperatures, 0)
             ),
             target_fn=(
-                lambda value: cast(int, value.state_target_temperature[0].temperature)
-                / 100.0
+                lambda value: _get_temperature_value(value.state_target_temperature, 0)
             ),
             zone=1,
         ),
@@ -84,11 +90,10 @@ CLIMATE_TYPES: Final[tuple[MieleClimateDefinition, ...]] = (
         description=MieleClimateDescription(
             key="thermostat2",
             value_fn=(
-                lambda value: cast(int, value.state_temperatures[1].temperature) / 100.0
+                lambda value: _get_temperature_value(value.state_temperatures, 1)
             ),
             target_fn=(
-                lambda value: cast(int, value.state_target_temperature[1].temperature)
-                / 100.0
+                lambda value: _get_temperature_value(value.state_target_temperature, 1)
             ),
             translation_key="zone_2",
             zone=2,
@@ -107,11 +112,10 @@ CLIMATE_TYPES: Final[tuple[MieleClimateDefinition, ...]] = (
         description=MieleClimateDescription(
             key="thermostat3",
             value_fn=(
-                lambda value: cast(int, value.state_temperatures[2].temperature) / 100.0
+                lambda value: _get_temperature_value(value.state_temperatures, 2)
             ),
             target_fn=(
-                lambda value: cast(int, value.state_target_temperature[2].temperature)
-                / 100.0
+                lambda value: _get_temperature_value(value.state_target_temperature, 2)
             ),
             translation_key="zone_3",
             zone=3,
@@ -132,7 +136,7 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up the climate platform."""
-    coordinator = config_entry.runtime_data
+    coordinator = config_entry.runtime_data.coordinator
     added_devices: set[str] = set()
 
     def _async_add_new_devices() -> None:
@@ -171,6 +175,7 @@ class MieleClimate(MieleEntity, ClimateEntity):
     _attr_supported_features = ClimateEntityFeature.TARGET_TEMPERATURE
 
     @property
+    @override
     def current_temperature(self) -> float | None:
         """Return the current temperature."""
         return cast(float, self.entity_description.value_fn(self.device))
@@ -211,27 +216,35 @@ class MieleClimate(MieleEntity, ClimateEntity):
         self._attr_unique_id = f"{device_id}-{description.key}-{description.zone}"
 
     @property
+    @override
     def target_temperature(self) -> float | None:
         """Return the target temperature."""
 
         return cast(float | None, self.entity_description.target_fn(self.device))
 
     @property
+    @override
     def max_temp(self) -> float:
         """Return the maximum target temperature."""
+        if len(self.action.target_temperature) < self.entity_description.zone:
+            return super().max_temp
         return cast(
             float,
             self.action.target_temperature[self.entity_description.zone - 1].max,
         )
 
     @property
+    @override
     def min_temp(self) -> float:
         """Return the minimum target temperature."""
+        if len(self.action.target_temperature) < self.entity_description.zone:
+            return super().min_temp
         return cast(
             float,
             self.action.target_temperature[self.entity_description.zone - 1].min,
         )
 
+    @override
     async def async_set_temperature(self, **kwargs: Any) -> None:
         """Set new target temperature."""
         try:
@@ -240,7 +253,8 @@ class MieleClimate(MieleEntity, ClimateEntity):
                 cast(float, kwargs.get(ATTR_TEMPERATURE)),
                 self.entity_description.zone,
             )
-        except aiohttp.ClientError as err:
+        except ClientResponseError as err:
+            _LOGGER.debug("Error setting climate state for %s: %s", self.entity_id, err)
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
                 translation_key="set_state_error",

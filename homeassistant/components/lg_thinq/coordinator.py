@@ -1,10 +1,9 @@
 """DataUpdateCoordinator for the LG ThinQ device."""
 
-from __future__ import annotations
-
 from collections.abc import Mapping
+from datetime import time
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, override
 
 from thinqconnect import ThinQAPIException
 from thinqconnect.integration import HABridge
@@ -70,6 +69,9 @@ class DeviceDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 event_filter=self.async_config_update_filter,
             )
         )
+        # Time of day for fetching the device's energy usage
+        # (randomly assigned when device is first created in Home Assistant)
+        self.update_energy_at_time_of_day: time | None = None
 
     async def _handle_update_config(self, _: Event) -> None:
         """Handle update core config."""
@@ -92,6 +94,7 @@ class DeviceDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             REVERSE_DEVICE_UNIT_TO_HA.get(self.hass.config.units.temperature_unit)
         )
 
+    @override
     async def _async_update_data(self) -> dict[str, Any]:
         """Request to the server to update the status from full response data."""
         try:

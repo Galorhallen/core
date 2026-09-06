@@ -1,8 +1,7 @@
 """Tracks devices by sending a ICMP echo request (ping)."""
 
-from __future__ import annotations
-
 from datetime import datetime, timedelta
+from typing import override
 
 from homeassistant.components.device_tracker import (
     CONF_CONSIDER_HOME,
@@ -10,11 +9,12 @@ from homeassistant.components.device_tracker import (
     ScannerEntity,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
-from .const import CONF_IMPORTED_BY
+from .const import CONF_IMPORTED_BY, DOMAIN
 from .coordinator import PingConfigEntry, PingUpdateCoordinator
 
 
@@ -24,7 +24,7 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up a Ping config entry."""
-    async_add_entities([PingDeviceTracker(entry, entry.runtime_data)])
+    async_add_entities([PingDeviceTracker(hass, entry, entry.runtime_data)])
 
 
 class PingDeviceTracker(CoordinatorEntity[PingUpdateCoordinator], ScannerEntity):
@@ -33,7 +33,10 @@ class PingDeviceTracker(CoordinatorEntity[PingUpdateCoordinator], ScannerEntity)
     _last_seen: datetime | None = None
 
     def __init__(
-        self, config_entry: PingConfigEntry, coordinator: PingUpdateCoordinator
+        self,
+        hass: HomeAssistant,
+        config_entry: PingConfigEntry,
+        coordinator: PingUpdateCoordinator,
     ) -> None:
         """Initialize the Ping device tracker."""
         super().__init__(coordinator)
@@ -46,17 +49,27 @@ class PingDeviceTracker(CoordinatorEntity[PingUpdateCoordinator], ScannerEntity)
             )
         )
 
+        if (
+            device := dr.async_get(hass).async_get_device_by_identifier(
+                (DOMAIN, config_entry.entry_id), config_entry.entry_id
+            )
+        ) is not None:
+            self.device_entry = device
+
     @property
+    @override
     def ip_address(self) -> str:
         """Return the primary ip address of the device."""
         return self.coordinator.data.ip_address
 
     @property
+    @override
     def unique_id(self) -> str:
         """Return a unique ID."""
         return self.config_entry.entry_id
 
     @property
+    @override
     def is_connected(self) -> bool:
         """Return true if ping returns is_alive or considered home."""
         if self.coordinator.data.is_alive:
@@ -68,6 +81,7 @@ class PingDeviceTracker(CoordinatorEntity[PingUpdateCoordinator], ScannerEntity)
         )
 
     @property
+    @override
     def entity_registry_enabled_default(self) -> bool:
         """Return if entity is enabled by default."""
         if CONF_IMPORTED_BY in self.config_entry.data:

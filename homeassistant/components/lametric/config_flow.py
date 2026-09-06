@@ -1,11 +1,9 @@
 """Config flow to configure the LaMetric integration."""
 
-from __future__ import annotations
-
 from collections.abc import Mapping
 from ipaddress import ip_address
 import logging
-from typing import Any
+from typing import Any, override
 
 from demetriek import (
     CloudDevice,
@@ -48,6 +46,8 @@ from homeassistant.util.network import is_link_local
 
 from .const import DOMAIN, LOGGER
 
+DEVICES_URL = "https://developer.lametric.com/user/devices"
+
 
 class LaMetricFlowHandler(AbstractOAuth2FlowHandler, domain=DOMAIN):
     """Handle a LaMetric config flow."""
@@ -61,21 +61,25 @@ class LaMetricFlowHandler(AbstractOAuth2FlowHandler, domain=DOMAIN):
     discovered: bool = False
 
     @property
+    @override
     def logger(self) -> logging.Logger:
         """Return logger."""
         return LOGGER
 
     @property
+    @override
     def extra_authorize_data(self) -> dict[str, Any]:
         """Extra data that needs to be appended to the authorize url."""
         return {"scope": "basic devices_read"}
 
+    @override
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Handle a flow initiated by the user."""
         return await self.async_step_choice_enter_manual_or_fetch_cloud()
 
+    @override
     async def async_step_ssdp(
         self, discovery_info: SsdpServiceInfo
     ) -> ConfigFlowResult:
@@ -164,6 +168,9 @@ class LaMetricFlowHandler(AbstractOAuth2FlowHandler, domain=DOMAIN):
         return self.async_show_form(
             step_id="manual_entry",
             data_schema=vol.Schema(schema),
+            description_placeholders={
+                "devices_url": DEVICES_URL,
+            },
             errors=errors,
         )
 
@@ -291,6 +298,7 @@ class LaMetricFlowHandler(AbstractOAuth2FlowHandler, domain=DOMAIN):
             },
         )
 
+    @override
     async def async_step_dhcp(
         self, discovery_info: DhcpServiceInfo
     ) -> ConfigFlowResult:

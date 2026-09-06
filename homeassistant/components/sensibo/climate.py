@@ -1,30 +1,16 @@
 """Support for Sensibo climate devices."""
 
-from __future__ import annotations
-
 from bisect import bisect_left
-from typing import TYPE_CHECKING, Any
-
-import voluptuous as vol
+from typing import TYPE_CHECKING, Any, override
 
 from homeassistant.components.climate import (
-    ATTR_FAN_MODE,
-    ATTR_HVAC_MODE,
-    ATTR_SWING_MODE,
     ClimateEntity,
     ClimateEntityFeature,
     HVACMode,
 )
-from homeassistant.const import (
-    ATTR_MODE,
-    ATTR_STATE,
-    ATTR_TEMPERATURE,
-    PRECISION_TENTHS,
-    UnitOfTemperature,
-)
-from homeassistant.core import HomeAssistant, SupportsResponse
+from homeassistant.const import ATTR_TEMPERATURE, PRECISION_TENTHS, UnitOfTemperature
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
-from homeassistant.helpers import config_validation as cv, entity_platform
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util.unit_conversion import TemperatureConverter
 
@@ -32,30 +18,6 @@ from . import SensiboConfigEntry
 from .const import DOMAIN
 from .coordinator import SensiboDataUpdateCoordinator
 from .entity import SensiboDeviceBaseEntity, async_handle_api_call
-
-SERVICE_ASSUME_STATE = "assume_state"
-SERVICE_ENABLE_TIMER = "enable_timer"
-ATTR_MINUTES = "minutes"
-SERVICE_ENABLE_PURE_BOOST = "enable_pure_boost"
-SERVICE_DISABLE_PURE_BOOST = "disable_pure_boost"
-SERVICE_FULL_STATE = "full_state"
-SERVICE_ENABLE_CLIMATE_REACT = "enable_climate_react"
-SERVICE_GET_DEVICE_CAPABILITIES = "get_device_capabilities"
-ATTR_HIGH_TEMPERATURE_THRESHOLD = "high_temperature_threshold"
-ATTR_HIGH_TEMPERATURE_STATE = "high_temperature_state"
-ATTR_LOW_TEMPERATURE_THRESHOLD = "low_temperature_threshold"
-ATTR_LOW_TEMPERATURE_STATE = "low_temperature_state"
-ATTR_SMART_TYPE = "smart_type"
-
-ATTR_AC_INTEGRATION = "ac_integration"
-ATTR_GEO_INTEGRATION = "geo_integration"
-ATTR_INDOOR_INTEGRATION = "indoor_integration"
-ATTR_OUTDOOR_INTEGRATION = "outdoor_integration"
-ATTR_SENSITIVITY = "sensitivity"
-ATTR_TARGET_TEMPERATURE = "target_temperature"
-ATTR_HORIZONTAL_SWING_MODE = "horizontal_swing_mode"
-ATTR_LIGHT = "light"
-BOOST_INCLUSIVE = "boost_inclusive"
 
 AVAILABLE_FAN_MODES = {
     "quiet",
@@ -162,66 +124,6 @@ async def async_setup_entry(
     entry.async_on_unload(coordinator.async_add_listener(_add_remove_devices))
     _add_remove_devices()
 
-    platform = entity_platform.async_get_current_platform()
-    platform.async_register_entity_service(
-        SERVICE_ASSUME_STATE,
-        {
-            vol.Required(ATTR_STATE): vol.In(["on", "off"]),
-        },
-        "async_assume_state",
-    )
-    platform.async_register_entity_service(
-        SERVICE_ENABLE_TIMER,
-        {
-            vol.Required(ATTR_MINUTES): cv.positive_int,
-        },
-        "async_enable_timer",
-    )
-    platform.async_register_entity_service(
-        SERVICE_ENABLE_PURE_BOOST,
-        {
-            vol.Required(ATTR_AC_INTEGRATION): bool,
-            vol.Required(ATTR_GEO_INTEGRATION): bool,
-            vol.Required(ATTR_INDOOR_INTEGRATION): bool,
-            vol.Required(ATTR_OUTDOOR_INTEGRATION): bool,
-            vol.Required(ATTR_SENSITIVITY): vol.In(["normal", "sensitive"]),
-        },
-        "async_enable_pure_boost",
-    )
-    platform.async_register_entity_service(
-        SERVICE_FULL_STATE,
-        {
-            vol.Required(ATTR_MODE): vol.In(
-                ["cool", "heat", "fan", "auto", "dry", "off"]
-            ),
-            vol.Optional(ATTR_TARGET_TEMPERATURE): int,
-            vol.Optional(ATTR_FAN_MODE): str,
-            vol.Optional(ATTR_SWING_MODE): str,
-            vol.Optional(ATTR_HORIZONTAL_SWING_MODE): str,
-            vol.Optional(ATTR_LIGHT): vol.In(["on", "off", "dim"]),
-        },
-        "async_full_ac_state",
-    )
-    platform.async_register_entity_service(
-        SERVICE_ENABLE_CLIMATE_REACT,
-        {
-            vol.Required(ATTR_HIGH_TEMPERATURE_THRESHOLD): vol.Coerce(float),
-            vol.Required(ATTR_HIGH_TEMPERATURE_STATE): dict,
-            vol.Required(ATTR_LOW_TEMPERATURE_THRESHOLD): vol.Coerce(float),
-            vol.Required(ATTR_LOW_TEMPERATURE_STATE): dict,
-            vol.Required(ATTR_SMART_TYPE): vol.In(
-                ["temperature", "feelslike", "humidity"]
-            ),
-        },
-        "async_enable_climate_react",
-    )
-    platform.async_register_entity_service(
-        SERVICE_GET_DEVICE_CAPABILITIES,
-        {vol.Required(ATTR_HVAC_MODE): vol.Coerce(HVACMode)},
-        "async_get_device_capabilities",
-        supports_response=SupportsResponse.ONLY,
-    )
-
 
 class SensiboClimate(SensiboDeviceBaseEntity, ClimateEntity):
     """Representation of a Sensibo climate device."""
@@ -243,6 +145,7 @@ class SensiboClimate(SensiboDeviceBaseEntity, ClimateEntity):
         )
 
     @property
+    @override
     def supported_features(self) -> ClimateEntityFeature:
         """Return the list of supported features."""
         features = ClimateEntityFeature.TURN_OFF | ClimateEntityFeature.TURN_ON
@@ -252,11 +155,13 @@ class SensiboClimate(SensiboDeviceBaseEntity, ClimateEntity):
         return features
 
     @property
+    @override
     def current_humidity(self) -> float | None:
         """Return the current humidity."""
         return self.device_data.humidity
 
     @property
+    @override
     def hvac_mode(self) -> HVACMode:
         """Return hvac operation."""
         if self.device_data.device_on and self.device_data.hvac_mode:
@@ -264,6 +169,7 @@ class SensiboClimate(SensiboDeviceBaseEntity, ClimateEntity):
         return HVACMode.OFF
 
     @property
+    @override
     def hvac_modes(self) -> list[HVACMode]:
         """Return the list of available hvac operation modes."""
         if TYPE_CHECKING:
@@ -271,6 +177,7 @@ class SensiboClimate(SensiboDeviceBaseEntity, ClimateEntity):
         return [SENSIBO_TO_HA[mode] for mode in self.device_data.hvac_modes]
 
     @property
+    @override
     def current_temperature(self) -> float | None:
         """Return the current temperature."""
         if self.device_data.temp:
@@ -282,6 +189,7 @@ class SensiboClimate(SensiboDeviceBaseEntity, ClimateEntity):
         return None
 
     @property
+    @override
     def temperature_unit(self) -> str:
         """Return temperature unit."""
         return (
@@ -291,55 +199,66 @@ class SensiboClimate(SensiboDeviceBaseEntity, ClimateEntity):
         )
 
     @property
+    @override
     def target_temperature(self) -> float | None:
         """Return the temperature we try to reach."""
         return self.device_data.target_temp
 
     @property
+    @override
     def target_temperature_step(self) -> float | None:
         """Return the supported step of target temperature."""
         return self.device_data.temp_step
 
     @property
+    @override
     def fan_mode(self) -> str | None:
         """Return the fan setting."""
         return self.device_data.fan_mode
 
     @property
+    @override
     def fan_modes(self) -> list[str] | None:
         """Return the list of available fan modes."""
         return self.device_data.fan_modes
 
     @property
+    @override
     def swing_mode(self) -> str | None:
         """Return the swing setting."""
         return self.device_data.swing_mode
 
     @property
+    @override
     def swing_modes(self) -> list[str] | None:
         """Return the list of available swing modes."""
         return self.device_data.swing_modes
 
     @property
+    @override
     def swing_horizontal_mode(self) -> str | None:
         """Return the horizontal swing setting."""
         return self.device_data.horizontal_swing_mode
 
     @property
+    @override
     def swing_horizontal_modes(self) -> list[str] | None:
         """Return the list of available horizontal swing modes."""
         return self.device_data.horizontal_swing_modes
 
     @property
+    @override
     def min_temp(self) -> float:
         """Return the minimum temperature."""
         return self.device_data.temp_list[0]
 
     @property
+    @override
     def max_temp(self) -> float:
         """Return the maximum temperature."""
         return self.device_data.temp_list[-1]
 
+    @override
     async def async_set_temperature(self, **kwargs: Any) -> None:
         """Set new target temperature."""
         temperature: float = kwargs[ATTR_TEMPERATURE]
@@ -354,6 +273,7 @@ class SensiboClimate(SensiboDeviceBaseEntity, ClimateEntity):
             assumed_state=False,
         )
 
+    @override
     async def async_set_fan_mode(self, fan_mode: str) -> None:
         """Set new target fan mode."""
         if fan_mode not in AVAILABLE_FAN_MODES:
@@ -372,6 +292,7 @@ class SensiboClimate(SensiboDeviceBaseEntity, ClimateEntity):
             transformation=transformation,
         )
 
+    @override
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Set new target operation mode."""
         if hvac_mode == HVACMode.OFF:
@@ -399,6 +320,7 @@ class SensiboClimate(SensiboDeviceBaseEntity, ClimateEntity):
             assumed_state=False,
         )
 
+    @override
     async def async_set_swing_mode(self, swing_mode: str) -> None:
         """Set new target swing operation."""
         if swing_mode not in AVAILABLE_SWING_MODES:
@@ -417,6 +339,7 @@ class SensiboClimate(SensiboDeviceBaseEntity, ClimateEntity):
             transformation=transformation,
         )
 
+    @override
     async def async_set_swing_horizontal_mode(self, swing_horizontal_mode: str) -> None:
         """Set new target horizontal swing operation."""
         if swing_horizontal_mode not in AVAILABLE_HORIZONTAL_SWING_MODES:
@@ -437,6 +360,7 @@ class SensiboClimate(SensiboDeviceBaseEntity, ClimateEntity):
             transformation=transformation,
         )
 
+    @override
     async def async_turn_on(self) -> None:
         """Turn Sensibo unit on."""
         await self.async_send_api_call(
@@ -446,6 +370,7 @@ class SensiboClimate(SensiboDeviceBaseEntity, ClimateEntity):
             assumed_state=False,
         )
 
+    @override
     async def async_turn_off(self) -> None:
         """Turn Sensibo unit on."""
         await self.async_send_api_call(

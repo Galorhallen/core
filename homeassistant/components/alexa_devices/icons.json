@@ -1,45 +1,58 @@
 {
   "entity": {
-    "binary_sensor": {
-      "bluetooth": {
-        "default": "mdi:bluetooth-off",
+    "event": {
+      "voice_event": {
+        "default": "mdi:chat-processing"
+      }
+    },
+    "select": {
+      "dropin": {
+        "default": "mdi:account-multiple-plus",
         "state": {
-          "on": "mdi:bluetooth"
+          "all": "mdi:account-multiple-plus",
+          "home": "mdi:home-plus",
+          "off": "mdi:phone-off"
+        }
+      }
+    },
+    "sensor": {
+      "voc_index": {
+        "default": "mdi:molecule"
+      }
+    },
+    "switch": {
+      "announcements": {
+        "default": "mdi:microphone-message",
+        "state": {
+          "off": "mdi:microphone-message-off"
         }
       },
-      "baby_cry_detection": {
-        "default": "mdi:account-voice-off",
+      "communications": {
+        "default": "mdi:message-bulleted",
         "state": {
-          "on": "mdi:account-voice"
+          "off": "mdi:message-bulleted-off"
         }
       },
-      "beeping_appliance_detection": {
-        "default": "mdi:bell-off",
+      "do_not_disturb": {
+        "default": "mdi:bell",
         "state": {
-          "on": "mdi:bell-ring"
+          "off": "mdi:bell-off"
         }
+      }
+    },
+    "todo": {
+      "shop": {
+        "default": "mdi:cart"
       },
-      "cough_detection": {
-        "default": "mdi:blur-off",
-        "state": {
-          "on": "mdi:blur"
-        }
-      },
-      "dog_bark_detection": {
-        "default": "mdi:dog-side-off",
-        "state": {
-          "on": "mdi:dog-side"
-        }
-      },
-      "water_sounds_detection": {
-        "default": "mdi:water-pump-off",
-        "state": {
-          "on": "mdi:water-pump"
-        }
+      "todo": {
+        "default": "mdi:checkbox-marked-circle-auto-outline"
       }
     }
   },
   "services": {
+    "send_info_skill": {
+      "service": "mdi:information"
+    },
     "send_sound": {
       "service": "mdi:cast-audio"
     },

@@ -3,6 +3,7 @@
 from datetime import timedelta
 import logging
 import socket
+from typing import override
 
 import motionmount
 
@@ -36,6 +37,7 @@ class MotionMountPresets(MotionMountEntity, SelectEntity):
 
     _attr_should_poll = True
     _attr_translation_key = "motionmount_preset"
+    _name_to_index: dict[str, int]
 
     def __init__(
         self,
@@ -50,8 +52,12 @@ class MotionMountPresets(MotionMountEntity, SelectEntity):
 
     def _update_options(self, presets: list[motionmount.Preset]) -> None:
         """Convert presets to select options."""
-        options = [f"{preset.index}: {preset.name}" for preset in presets]
-        options.insert(0, WALL_PRESET_NAME)
+        # Ordered list of options (wall first, then presets)
+        options = [WALL_PRESET_NAME] + [preset.name for preset in presets]
+
+        # Build mapping name → index (wall = 0)
+        self._name_to_index = {WALL_PRESET_NAME: 0}
+        self._name_to_index.update({preset.name: preset.index for preset in presets})
 
         self._attr_options = options
 
@@ -64,7 +70,7 @@ class MotionMountPresets(MotionMountEntity, SelectEntity):
             return True
         try:
             await self.mm.connect()
-        except (ConnectionError, TimeoutError, socket.gaierror):
+        except ConnectionError, TimeoutError, socket.gaierror:
             # We're not interested in exceptions here. In case of a failed connection
             # the try/except from the caller will report it.
             # The purpose of `_ensure_connected()` is only to make sure we try to
@@ -100,13 +106,15 @@ class MotionMountPresets(MotionMountEntity, SelectEntity):
             self._update_options(self._presets)
 
     @property
+    @override
     def current_option(self) -> str | None:
         """Get the current option."""
         # When the mount is moving we return the currently selected option
         if self.mm.is_moving:
             return self._attr_current_option
 
-        # When the mount isn't moving we select the option that matches the current position
+        # When the mount isn't moving we select the option
+        # that matches the current position
         self._attr_current_option = None
         if self.mm.extension == 0 and self.mm.turn == 0:
             self._attr_current_option = self._attr_options[0]  # Select Wall preset
@@ -121,9 +129,13 @@ class MotionMountPresets(MotionMountEntity, SelectEntity):
 
         return self._attr_current_option
 
+    @override
     async def async_select_option(self, option: str) -> None:
         """Set the new option."""
-        index = int(option[:1])
+        index = self._name_to_index.get(option)
+        if index is None:
+            raise HomeAssistantError(f"Unknown preset selected: {option}")
+
         try:
             await self.mm.go_to_preset(index)
         except (TimeoutError, socket.gaierror) as ex:

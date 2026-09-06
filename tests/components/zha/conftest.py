@@ -1,6 +1,6 @@
 """Test configuration for the ZHA component."""
 
-from collections.abc import Generator
+from collections.abc import Callable, Coroutine, Generator
 import itertools
 import time
 from typing import Any
@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 import warnings
 
 import pytest
+from zha.quirks import DEVICE_REGISTRY
 import zhaquirks
 import zigpy
 from zigpy.application import ControllerApplication
@@ -18,7 +19,6 @@ import zigpy.device
 import zigpy.group
 import zigpy.profiles
 from zigpy.profiles import zha
-import zigpy.quirks
 import zigpy.state
 import zigpy.types
 import zigpy.util
@@ -120,7 +120,7 @@ def _wrap_mock_instance(obj: Any) -> MagicMock:
     mock = create_autospec(obj, spec_set=True, instance=True)
 
     for attr_name in dir(obj):
-        if attr_name.startswith("__") and attr_name not in {"__getitem__"}:
+        if attr_name.startswith("__") and attr_name != "__getitem__":
             continue
 
         real_attr = getattr(obj, attr_name)
@@ -184,6 +184,9 @@ async def zigpy_app_controller():
             warnings.simplefilter("ignore", DeprecationWarning)
             mock_app = _wrap_mock_instance(app)
             mock_app.backups = _wrap_mock_instance(app.backups)
+            mock_app._concurrent_requests_semaphore = _wrap_mock_instance(
+                app._concurrent_requests_semaphore
+            )
 
         yield mock_app
 
@@ -192,7 +195,7 @@ async def zigpy_app_controller():
 async def config_entry_fixture() -> MockConfigEntry:
     """Fixture representing a config entry."""
     return MockConfigEntry(
-        version=4,
+        version=5,
         domain=zha_const.DOMAIN,
         data={
             zigpy.config.CONF_DEVICE: {
@@ -241,11 +244,11 @@ def setup_zha(
     hass: HomeAssistant,
     config_entry: MockConfigEntry,
     mock_zigpy_connect: ControllerApplication,
-):
+) -> Callable[..., Coroutine[None]]:
     """Set up ZHA component."""
     zha_config = {zha_const.CONF_ENABLE_QUIRKS: False}
 
-    async def _setup(config=None):
+    async def _setup(config=None) -> None:
         config_entry.add_to_hass(hass)
         config = config or {}
 
@@ -353,7 +356,7 @@ def network_backup() -> zigpy.backups.NetworkBackup:
 
 
 @pytest.fixture
-def zigpy_device_mock(zigpy_app_controller):
+def zigpy_device_mock(zigpy_app_controller) -> Callable[..., zigpy.device.Device]:
     """Make a fake device using the specified cluster classes."""
 
     def _mock_dev(
@@ -394,7 +397,7 @@ def zigpy_device_mock(zigpy_app_controller):
             device = quirk(zigpy_app_controller, device.ieee, device.nwk, device)
         else:
             # Allow zigpy to apply quirks if we don't pass one explicitly
-            device = zigpy.quirks.get_device(device)
+            device = DEVICE_REGISTRY.resolve(device)
 
         if patch_cluster:
             for endpoint in (ep for epid, ep in device.endpoints.items() if epid):

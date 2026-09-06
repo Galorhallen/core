@@ -1,6 +1,6 @@
 """Support for RuuviTag sensors."""
 
-from __future__ import annotations
+from typing import override
 
 from sensor_state_data import (
     DeviceKey,
@@ -9,12 +9,10 @@ from sensor_state_data import (
     Units,
 )
 
-from homeassistant import config_entries
 from homeassistant.components.bluetooth.passive_update_processor import (
     PassiveBluetoothDataProcessor,
     PassiveBluetoothDataUpdate,
     PassiveBluetoothEntityKey,
-    PassiveBluetoothProcessorCoordinator,
     PassiveBluetoothProcessorEntity,
 )
 from homeassistant.components.sensor import (
@@ -35,7 +33,7 @@ from homeassistant.helpers.entity import EntityDescription
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.sensor import sensor_device_info_to_hass_device_info
 
-from .const import DOMAIN
+from . import RuuvitagBLEConfigEntry
 
 SENSOR_DESCRIPTIONS = {
     "temperature": SensorEntityDescription(
@@ -104,7 +102,25 @@ SENSOR_DESCRIPTIONS = {
         state_class=SensorStateClass.MEASUREMENT,
         entity_registry_enabled_default=False,
     ),
-    # Keys exported for dataformat 06 sensors in newer versions of ruuvitag-ble
+    # Keys exported for dataformat 06/e1 sensors in newer versions of ruuvitag-ble
+    "pm1": SensorEntityDescription(
+        key=f"{SSDSensorDeviceClass.PM1}_{Units.CONCENTRATION_MICROGRAMS_PER_CUBIC_METER}",
+        device_class=SensorDeviceClass.PM1,
+        native_unit_of_measurement=Units.CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    "pm4": SensorEntityDescription(
+        key=f"{SSDSensorDeviceClass.PM4}_{Units.CONCENTRATION_MICROGRAMS_PER_CUBIC_METER}",
+        device_class=SensorDeviceClass.PM4,
+        native_unit_of_measurement=Units.CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    "pm10": SensorEntityDescription(
+        key=f"{SSDSensorDeviceClass.PM10}_{Units.CONCENTRATION_MICROGRAMS_PER_CUBIC_METER}",
+        device_class=SensorDeviceClass.PM10,
+        native_unit_of_measurement=Units.CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
     "pm25": SensorEntityDescription(
         key=f"{SSDSensorDeviceClass.PM25}_{Units.CONCENTRATION_MICROGRAMS_PER_CUBIC_METER}",
         device_class=SensorDeviceClass.PM25,
@@ -132,6 +148,12 @@ SENSOR_DESCRIPTIONS = {
         key="nox_index",
         translation_key="nox_index",
         state_class=SensorStateClass.MEASUREMENT,
+    ),
+    "iaqs": SensorEntityDescription(
+        key="iaqs",
+        translation_key="iaqs",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_registry_enabled_default=False,
     ),
 }
 
@@ -170,20 +192,20 @@ def sensor_update_to_bluetooth_data_update(
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: config_entries.ConfigEntry,
+    entry: RuuvitagBLEConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up the Ruuvitag BLE sensors."""
-    coordinator: PassiveBluetoothProcessorCoordinator = hass.data[DOMAIN][
-        entry.entry_id
-    ]
+    """Set up the Ruuvi BLE sensors."""
+    coordinator = entry.runtime_data
     processor = PassiveBluetoothDataProcessor(sensor_update_to_bluetooth_data_update)
     entry.async_on_unload(
         processor.async_add_entities_listener(
             RuuvitagBluetoothSensorEntity, async_add_entities
         )
     )
-    entry.async_on_unload(coordinator.async_register_processor(processor))
+    entry.async_on_unload(
+        coordinator.async_register_processor(processor, SensorEntityDescription)
+    )
 
 
 class RuuvitagBluetoothSensorEntity(
@@ -192,9 +214,10 @@ class RuuvitagBluetoothSensorEntity(
     ],
     SensorEntity,
 ):
-    """Representation of a Ruuvitag BLE sensor."""
+    """Representation of a Ruuvi BLE sensor."""
 
     @property
+    @override
     def native_value(self) -> int | float | None:
         """Return the native value."""
         return self.processor.entity_data.get(self.entity_key)

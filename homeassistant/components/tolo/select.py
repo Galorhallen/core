@@ -1,20 +1,18 @@
 """TOLO Sauna Select controls."""
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import override
 
 from tololib import ToloClient, ToloSettings
 
 from homeassistant.components.select import SelectEntity, SelectEntityDescription
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import DOMAIN, AromaTherapySlot, LampMode
-from .coordinator import ToloSaunaUpdateCoordinator
+from .const import AromaTherapySlot, LampMode
+from .coordinator import ToloConfigEntry, ToloSaunaUpdateCoordinator
 from .entity import ToloSaunaCoordinatorEntity
 
 
@@ -53,11 +51,11 @@ SELECTS = (
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: ToloConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up select entities for TOLO Sauna."""
-    coordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator = entry.runtime_data
     async_add_entities(
         ToloSelectEntity(coordinator, entry, description) for description in SELECTS
     )
@@ -73,7 +71,7 @@ class ToloSelectEntity(ToloSaunaCoordinatorEntity, SelectEntity):
     def __init__(
         self,
         coordinator: ToloSaunaUpdateCoordinator,
-        entry: ConfigEntry,
+        entry: ToloConfigEntry,
         entity_description: ToloSelectEntityDescription,
     ) -> None:
         """Initialize TOLO select entity."""
@@ -82,15 +80,18 @@ class ToloSelectEntity(ToloSaunaCoordinatorEntity, SelectEntity):
         self._attr_unique_id = f"{entry.entry_id}_{entity_description.key}"
 
     @property
+    @override
     def options(self) -> list[str]:
         """Return available select options."""
         return self.entity_description.options
 
     @property
+    @override
     def current_option(self) -> str:
         """Return current select option."""
         return self.entity_description.getter(self.coordinator.data.settings)
 
+    @override
     def select_option(self, option: str) -> None:
         """Select a select option."""
         self.entity_description.setter(self.coordinator.client, option)

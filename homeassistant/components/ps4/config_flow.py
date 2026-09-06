@@ -1,7 +1,7 @@
 """Config Flow for PlayStation 4."""
 
 from collections import OrderedDict
-from typing import Any
+from typing import Any, override
 
 from pyps4_2ndscreen.errors import CredentialTimeout
 from pyps4_2ndscreen.helpers import Helper
@@ -26,6 +26,7 @@ from .const import (
     DEFAULT_ALIAS,
     DEFAULT_NAME,
     DOMAIN,
+    PS4_DOCS_URL,
 )
 
 CONF_MODE = "Config Mode"
@@ -49,7 +50,6 @@ class PlayStation4FlowHandler(ConfigFlow, domain=DOMAIN):
         """Initialize the config flow."""
         self.helper = Helper()
         self.creds: str | None = None
-        self.name = None
         self.host = None
         self.region = None
         self.pin: str | None = None
@@ -57,6 +57,7 @@ class PlayStation4FlowHandler(ConfigFlow, domain=DOMAIN):
         self.location: location_util.LocationInfo | None = None
         self.device_list: list[str] = []
 
+    @override
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -66,7 +67,10 @@ class PlayStation4FlowHandler(ConfigFlow, domain=DOMAIN):
         failed = await self.hass.async_add_executor_job(self.helper.port_bind, ports)
         if failed in ports:
             reason = PORT_MSG[failed]
-            return self.async_abort(reason=reason)
+            return self.async_abort(
+                reason=reason,
+                description_placeholders={"ps4_docs_url": PS4_DOCS_URL},
+            )
         return await self.async_step_creds()
 
     async def async_step_creds(
@@ -85,7 +89,11 @@ class PlayStation4FlowHandler(ConfigFlow, domain=DOMAIN):
             except CredentialTimeout:
                 errors["base"] = "credential_timeout"
 
-        return self.async_show_form(step_id="creds", errors=errors)
+        return self.async_show_form(
+            step_id="creds",
+            errors=errors,
+            description_placeholders={"ps4_docs_url": PS4_DOCS_URL},
+        )
 
     async def async_step_mode(
         self, user_input: dict[str, Any] | None = None
@@ -157,7 +165,6 @@ class PlayStation4FlowHandler(ConfigFlow, domain=DOMAIN):
         # Login to PS4 with user data.
         if user_input is not None:
             self.region = user_input[CONF_REGION]
-            self.name = user_input[CONF_NAME]
             # Assume pin had leading zeros, before coercing to int.
             self.pin = str(user_input[CONF_CODE]).zfill(PIN_LENGTH)
             self.host = user_input[CONF_IP_ADDRESS]
@@ -178,7 +185,7 @@ class PlayStation4FlowHandler(ConfigFlow, domain=DOMAIN):
             else:
                 device = {
                     CONF_HOST: self.host,
-                    CONF_NAME: self.name,
+                    CONF_NAME: DEFAULT_NAME,
                     CONF_REGION: self.region,
                 }
 
@@ -207,7 +214,6 @@ class PlayStation4FlowHandler(ConfigFlow, domain=DOMAIN):
         link_schema[vol.Required(CONF_CODE)] = vol.All(
             vol.Strip, vol.Length(max=PIN_LENGTH), vol.Coerce(int)
         )
-        link_schema[vol.Required(CONF_NAME, default=DEFAULT_NAME)] = str
 
         return self.async_show_form(
             step_id="link", data_schema=vol.Schema(link_schema), errors=errors

@@ -3,7 +3,7 @@
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 import logging
-from typing import Any
+from typing import Any, override
 
 from aioautomower.model import MowerAttributes
 from aioautomower.session import AutomowerSession
@@ -106,13 +106,15 @@ class AutomowerButtonEntity(AutomowerControlEntity, ButtonEntity):
         self._attr_unique_id = f"{mower_id}_{description.key}"
 
     @property
+    @override
     def available(self) -> bool:
         """Return the available attribute of the entity."""
         return super().available and self.entity_description.available_fn(
             self.mower_attributes
         )
 
-    @handle_sending_exception()
+    @handle_sending_exception
+    @override
     async def async_press(self) -> None:
         """Send a command to the mower."""
         await self.entity_description.press_fn(self.coordinator.api, self.mower_id)

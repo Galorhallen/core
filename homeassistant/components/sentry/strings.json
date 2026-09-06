@@ -1,18 +1,15 @@
 {
   "config": {
+    "error": {
+      "bad_dsn": "Invalid DSN",
+      "unknown": "[%key:common::config_flow::error::unknown%]"
+    },
     "step": {
       "user": {
         "data": {
           "dsn": "Sentry DSN"
         }
       }
-    },
-    "error": {
-      "unknown": "[%key:common::config_flow::error::unknown%]",
-      "bad_dsn": "Invalid DSN"
-    },
-    "abort": {
-      "single_instance_allowed": "[%key:common::config_flow::abort::single_instance_allowed%]"
     }
   },
   "options": {

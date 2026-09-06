@@ -1,16 +1,18 @@
 """Coordinator for the mill component."""
 
-from __future__ import annotations
-
 from datetime import timedelta
 import logging
-from typing import cast
+from typing import cast, override
 
 from mill import Heater, Mill
 from mill_local import Mill as MillLocal
 
 from homeassistant.components.recorder import get_instance
-from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
+from homeassistant.components.recorder.models import (
+    StatisticData,
+    StatisticMeanType,
+    StatisticMetaData,
+)
 from homeassistant.components.recorder.statistics import (
     async_add_external_statistics,
     get_last_statistics,
@@ -21,6 +23,7 @@ from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util, slugify
+from homeassistant.util.unit_conversion import EnergyConverter
 
 from .const import DOMAIN
 
@@ -54,6 +57,9 @@ class MillDataUpdateCoordinator(DataUpdateCoordinator):
         )
 
 
+type MillConfigEntry = ConfigEntry[MillDataUpdateCoordinator]
+
+
 class MillHistoricDataUpdateCoordinator(DataUpdateCoordinator):
     """Class to manage fetching Mill historic data."""
 
@@ -74,6 +80,7 @@ class MillHistoricDataUpdateCoordinator(DataUpdateCoordinator):
             config_entry=config_entry,
         )
 
+    @override
     async def _async_update_data(self):
         """Update historic data via API."""
         now = dt_util.utcnow()
@@ -147,11 +154,12 @@ class MillHistoricDataUpdateCoordinator(DataUpdateCoordinator):
                     )
                 )
             metadata = StatisticMetaData(
-                has_mean=False,
+                mean_type=StatisticMeanType.NONE,
                 has_sum=True,
                 name=f"{heater.name}",
                 source=DOMAIN,
                 statistic_id=statistic_id,
+                unit_class=EnergyConverter.UNIT_CLASS,
                 unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
             )
             async_add_external_statistics(self.hass, metadata, statistics)

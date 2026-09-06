@@ -1,7 +1,9 @@
 """The Homee valve platform."""
 
+from typing import override
+
 from pyHomee.const import AttributeType
-from pyHomee.model import HomeeAttribute
+from pyHomee.model import HomeeAttribute, HomeeNode
 
 from homeassistant.components.valve import (
     ValveDeviceClass,
@@ -14,6 +16,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import HomeeConfigEntry
 from .entity import HomeeEntity
+from .helpers import setup_homee_platform
 
 PARALLEL_UPDATES = 0
 
@@ -25,18 +28,30 @@ VALVE_DESCRIPTIONS = {
 }
 
 
+async def add_valve_entities(
+    hass: HomeAssistant,
+    config_entry: HomeeConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+    nodes: list[HomeeNode],
+) -> None:
+    """Add homee valve entities."""
+    async_add_entities(
+        HomeeValve(hass, attribute, config_entry, VALVE_DESCRIPTIONS[attribute.type])
+        for node in nodes
+        for attribute in node.attributes
+        if attribute.type in VALVE_DESCRIPTIONS
+    )
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: HomeeConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Add the Homee platform for the valve component."""
+    """Add the homee platform for the valve component."""
 
-    async_add_entities(
-        HomeeValve(attribute, config_entry, VALVE_DESCRIPTIONS[attribute.type])
-        for node in config_entry.runtime_data.nodes
-        for attribute in node.attributes
-        if attribute.type in VALVE_DESCRIPTIONS
+    await setup_homee_platform(
+        hass, add_valve_entities, async_add_entities, config_entry
     )
 
 
@@ -47,16 +62,18 @@ class HomeeValve(HomeeEntity, ValveEntity):
 
     def __init__(
         self,
+        hass: HomeAssistant,
         attribute: HomeeAttribute,
         entry: HomeeConfigEntry,
         description: ValveEntityDescription,
     ) -> None:
         """Initialize a Homee valve entity."""
-        super().__init__(attribute, entry)
+        super().__init__(hass, attribute, entry)
         self.entity_description = description
         self._attr_translation_key = description.key
 
     @property
+    @override
     def supported_features(self) -> ValveEntityFeature:
         """Return the supported features."""
         if self._attribute.editable:
@@ -64,20 +81,24 @@ class HomeeValve(HomeeEntity, ValveEntity):
         return ValveEntityFeature(0)
 
     @property
+    @override
     def current_valve_position(self) -> int | None:
         """Return the current valve position."""
         return int(self._attribute.current_value)
 
     @property
+    @override
     def is_closing(self) -> bool:
         """Return if the valve is closing."""
         return self._attribute.target_value < self._attribute.current_value
 
     @property
+    @override
     def is_opening(self) -> bool:
         """Return if the valve is opening."""
         return self._attribute.target_value > self._attribute.current_value
 
+    @override
     async def async_set_valve_position(self, position: int) -> None:
         """Move the valve to a specific position."""
         await self.async_set_homee_value(position)

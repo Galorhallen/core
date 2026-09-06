@@ -1,10 +1,8 @@
 """Config flow for Coinbase integration."""
 
-from __future__ import annotations
-
 from collections.abc import Mapping
 import logging
-from typing import Any
+from typing import Any, override
 
 from coinbase.rest import RESTClient
 from coinbase.rest.rest_base import HTTPError
@@ -116,6 +114,7 @@ class CoinbaseConfigFlow(ConfigFlow, domain=DOMAIN):
 
     reauth_entry: CoinbaseConfigEntry
 
+    @override
     async def async_step_user(
         self, user_input: dict[str, str] | None = None
     ) -> ConfigFlowResult:
@@ -166,6 +165,7 @@ class CoinbaseConfigFlow(ConfigFlow, domain=DOMAIN):
                 data_schema=STEP_USER_DATA_SCHEMA,
                 description_placeholders={
                     "account_name": self.reauth_entry.title,
+                    "developer_url": "https://www.coinbase.com/developer-platform",
                 },
                 errors=errors,
             )
@@ -195,12 +195,14 @@ class CoinbaseConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=STEP_USER_DATA_SCHEMA,
             description_placeholders={
                 "account_name": self.reauth_entry.title,
+                "developer_url": "https://www.coinbase.com/developer-platform",
             },
             errors=errors,
         )
 
     @staticmethod
     @callback
+    @override
     def async_get_options_flow(
         config_entry: CoinbaseConfigEntry,
     ) -> OptionsFlowHandler:
@@ -300,4 +302,4 @@ class CurrencyUnavailable(HomeAssistantError):
 
 
 class ExchangeRateUnavailable(HomeAssistantError):
-    """Error to indicate the requested exchange rate resource is not provided by the API."""
+    """Error to indicate the requested exchange rate is not provided by the API."""

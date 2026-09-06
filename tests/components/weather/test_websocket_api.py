@@ -30,10 +30,10 @@ async def test_device_class_units(
     assert msg["result"] == {
         "units": {
             "precipitation_unit": ["in", "mm"],
-            "pressure_unit": ["hPa", "inHg", "mbar", "mmHg"],
+            "pressure_unit": ["hPa", "inHg", "kPa", "mbar", "mmHg"],
             "temperature_unit": ["°C", "°F"],
             "visibility_unit": ["km", "mi"],
-            "wind_speed_unit": ["ft/s", "km/h", "kn", "m/s", "mph"],
+            "wind_speed_unit": ["Beaufort", "ft/s", "km/h", "kn", "m/s", "mph"],
         }
     }
 

@@ -1,7 +1,5 @@
 """Test the unit system helper."""
 
-from __future__ import annotations
-
 import pytest
 
 from homeassistant.components.sensor import DEVICE_CLASS_UNITS, SensorDeviceClass
@@ -19,6 +17,7 @@ from homeassistant.const import (
     UnitOfMass,
     UnitOfPrecipitationDepth,
     UnitOfPressure,
+    UnitOfRadiationConcentration,
     UnitOfSpeed,
     UnitOfTemperature,
     UnitOfVolume,
@@ -27,7 +26,7 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.core_config import async_process_ha_core_config
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.util.unit_system import (  # pylint: disable=hass-deprecated-import
+from homeassistant.util.unit_system import (  # pylint: disable=home-assistant-deprecated-import
     _CONF_UNIT_SYSTEM_IMPERIAL,
     _CONF_UNIT_SYSTEM_METRIC,
     _CONF_UNIT_SYSTEM_US_CUSTOMARY,
@@ -433,6 +432,11 @@ def test_get_unit_system_invalid(key: str) -> None:
             UnitOfVolume.CENTUM_CUBIC_FEET,
             UnitOfVolume.CUBIC_METERS,
         ),
+        (
+            SensorDeviceClass.GAS,
+            UnitOfVolume.MILLE_CUBIC_FEET,
+            UnitOfVolume.CUBIC_METERS,
+        ),
         (SensorDeviceClass.GAS, UnitOfVolume.CUBIC_FEET, UnitOfVolume.CUBIC_METERS),
         (SensorDeviceClass.GAS, UnitOfVolume.LITERS, None),
         (SensorDeviceClass.GAS, UnitOfVolume.CUBIC_METERS, None),
@@ -510,6 +514,11 @@ def test_get_unit_system_invalid(key: str) -> None:
             UnitOfVolume.CENTUM_CUBIC_FEET,
             UnitOfVolume.CUBIC_METERS,
         ),
+        (
+            SensorDeviceClass.VOLUME,
+            UnitOfVolume.MILLE_CUBIC_FEET,
+            UnitOfVolume.CUBIC_METERS,
+        ),
         (SensorDeviceClass.VOLUME, UnitOfVolume.CUBIC_FEET, UnitOfVolume.CUBIC_METERS),
         (SensorDeviceClass.VOLUME, UnitOfVolume.FLUID_OUNCES, UnitOfVolume.MILLILITERS),
         (SensorDeviceClass.VOLUME, UnitOfVolume.GALLONS, UnitOfVolume.LITERS),
@@ -521,6 +530,11 @@ def test_get_unit_system_invalid(key: str) -> None:
         (
             SensorDeviceClass.WATER,
             UnitOfVolume.CENTUM_CUBIC_FEET,
+            UnitOfVolume.CUBIC_METERS,
+        ),
+        (
+            SensorDeviceClass.WATER,
+            UnitOfVolume.MILLE_CUBIC_FEET,
             UnitOfVolume.CUBIC_METERS,
         ),
         (SensorDeviceClass.WATER, UnitOfVolume.CUBIC_FEET, UnitOfVolume.CUBIC_METERS),
@@ -587,18 +601,22 @@ UNCONVERTED_UNITS_METRIC_SYSTEM = {
         UnitOfVolumetricFlux.MILLIMETERS_PER_HOUR,
     ),
     SensorDeviceClass.PRESSURE: (
+        UnitOfPressure.ATM,
         UnitOfPressure.BAR,
         UnitOfPressure.CBAR,
         UnitOfPressure.HPA,
         UnitOfPressure.KPA,
         UnitOfPressure.MBAR,
         UnitOfPressure.MMHG,
+        UnitOfPressure.MILLIPASCAL,
         UnitOfPressure.PA,
     ),
+    SensorDeviceClass.RADON: (UnitOfRadiationConcentration.BECQUEREL_PER_CUBIC_METER,),
     SensorDeviceClass.SPEED: (
         UnitOfSpeed.BEAUFORT,
         UnitOfSpeed.KILOMETERS_PER_HOUR,
         UnitOfSpeed.KNOTS,
+        UnitOfSpeed.METERS_PER_MINUTE,
         UnitOfSpeed.METERS_PER_SECOND,
         UnitOfSpeed.MILLIMETERS_PER_SECOND,
         UnitOfVolumetricFlux.MILLIMETERS_PER_DAY,
@@ -626,6 +644,7 @@ UNCONVERTED_UNITS_METRIC_SYSTEM = {
         SensorDeviceClass.PRECIPITATION,
         SensorDeviceClass.PRECIPITATION_INTENSITY,
         SensorDeviceClass.PRESSURE,
+        SensorDeviceClass.RADON,
         SensorDeviceClass.SPEED,
         SensorDeviceClass.VOLUME,
         SensorDeviceClass.WATER,
@@ -690,6 +709,7 @@ def test_metric_converted_units(device_class: SensorDeviceClass) -> None:
         (SensorDeviceClass.DISTANCE, "very_long", None),
         # Test gas meter conversion
         (SensorDeviceClass.GAS, UnitOfVolume.CENTUM_CUBIC_FEET, None),
+        (SensorDeviceClass.GAS, UnitOfVolume.MILLE_CUBIC_FEET, None),
         (SensorDeviceClass.GAS, UnitOfVolume.CUBIC_METERS, UnitOfVolume.CUBIC_FEET),
         (SensorDeviceClass.GAS, UnitOfVolume.LITERS, UnitOfVolume.CUBIC_FEET),
         (SensorDeviceClass.GAS, UnitOfVolume.CUBIC_FEET, None),
@@ -770,6 +790,7 @@ def test_metric_converted_units(device_class: SensorDeviceClass) -> None:
         (SensorDeviceClass.VOLUME, UnitOfVolume.LITERS, UnitOfVolume.GALLONS),
         (SensorDeviceClass.VOLUME, UnitOfVolume.MILLILITERS, UnitOfVolume.FLUID_OUNCES),
         (SensorDeviceClass.VOLUME, UnitOfVolume.CENTUM_CUBIC_FEET, None),
+        (SensorDeviceClass.VOLUME, UnitOfVolume.MILLE_CUBIC_FEET, None),
         (SensorDeviceClass.VOLUME, UnitOfVolume.CUBIC_FEET, None),
         (SensorDeviceClass.VOLUME, UnitOfVolume.FLUID_OUNCES, None),
         (SensorDeviceClass.VOLUME, UnitOfVolume.GALLONS, None),
@@ -778,6 +799,7 @@ def test_metric_converted_units(device_class: SensorDeviceClass) -> None:
         (SensorDeviceClass.WATER, UnitOfVolume.CUBIC_METERS, UnitOfVolume.CUBIC_FEET),
         (SensorDeviceClass.WATER, UnitOfVolume.LITERS, UnitOfVolume.GALLONS),
         (SensorDeviceClass.WATER, UnitOfVolume.CENTUM_CUBIC_FEET, None),
+        (SensorDeviceClass.WATER, UnitOfVolume.MILLE_CUBIC_FEET, None),
         (SensorDeviceClass.WATER, UnitOfVolume.CUBIC_FEET, None),
         (SensorDeviceClass.WATER, UnitOfVolume.GALLONS, None),
         (SensorDeviceClass.WATER, "very_much", None),
@@ -828,13 +850,18 @@ UNCONVERTED_UNITS_US_SYSTEM = {
         UnitOfLength.MILES,
         UnitOfLength.YARDS,
     ),
-    SensorDeviceClass.GAS: (UnitOfVolume.CENTUM_CUBIC_FEET, UnitOfVolume.CUBIC_FEET),
+    SensorDeviceClass.GAS: (
+        UnitOfVolume.CENTUM_CUBIC_FEET,
+        UnitOfVolume.MILLE_CUBIC_FEET,
+        UnitOfVolume.CUBIC_FEET,
+    ),
     SensorDeviceClass.PRECIPITATION: (UnitOfLength.INCHES,),
     SensorDeviceClass.PRECIPITATION_INTENSITY: (
         UnitOfVolumetricFlux.INCHES_PER_DAY,
         UnitOfVolumetricFlux.INCHES_PER_HOUR,
     ),
     SensorDeviceClass.PRESSURE: (UnitOfPressure.INHG, UnitOfPressure.PSI),
+    SensorDeviceClass.RADON: (UnitOfRadiationConcentration.PICOCURIES_PER_LITER,),
     SensorDeviceClass.SPEED: (
         UnitOfSpeed.BEAUFORT,
         UnitOfSpeed.FEET_PER_SECOND,
@@ -846,12 +873,14 @@ UNCONVERTED_UNITS_US_SYSTEM = {
     ),
     SensorDeviceClass.VOLUME: (
         UnitOfVolume.CENTUM_CUBIC_FEET,
+        UnitOfVolume.MILLE_CUBIC_FEET,
         UnitOfVolume.CUBIC_FEET,
         UnitOfVolume.FLUID_OUNCES,
         UnitOfVolume.GALLONS,
     ),
     SensorDeviceClass.WATER: (
         UnitOfVolume.CENTUM_CUBIC_FEET,
+        UnitOfVolume.MILLE_CUBIC_FEET,
         UnitOfVolume.CUBIC_FEET,
         UnitOfVolume.GALLONS,
     ),
@@ -867,6 +896,7 @@ UNCONVERTED_UNITS_US_SYSTEM = {
         SensorDeviceClass.PRECIPITATION,
         SensorDeviceClass.PRECIPITATION_INTENSITY,
         SensorDeviceClass.PRESSURE,
+        SensorDeviceClass.RADON,
         SensorDeviceClass.SPEED,
         SensorDeviceClass.VOLUME,
         SensorDeviceClass.WATER,

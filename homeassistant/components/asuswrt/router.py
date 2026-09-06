@@ -1,7 +1,5 @@
 """Represent the AsusWrt router."""
 
-from __future__ import annotations
-
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 import logging
@@ -18,7 +16,11 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.device_registry import DeviceInfo, format_mac
+from homeassistant.helpers.device_registry import (
+    CONNECTION_NETWORK_MAC,
+    DeviceInfo,
+    format_mac,
+)
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
@@ -50,6 +52,26 @@ SCAN_INTERVAL = timedelta(seconds=30)
 SENSORS_TYPE_COUNT = "sensors_count"
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def get_device_identifier(entry: ConfigEntry) -> tuple[str, str]:
+    """Return the device registry identifier of the router."""
+    return (DOMAIN, entry.unique_id or "AsusWRT")
+
+
+_ENTITY_MIGRATION_ID = {
+    "sensor_connected_device": "Devices Connected",
+    "sensor_rx_bytes": "Download",
+    "sensor_tx_bytes": "Upload",
+    "sensor_rx_rates": "Download Speed",
+    "sensor_tx_rates": "Upload Speed",
+    "sensor_load_avg1": "Load Avg (1m)",
+    "sensor_load_avg5": "Load Avg (5m)",
+    "sensor_load_avg15": "Load Avg (15m)",
+    "2.4GHz": "2.4GHz Temperature",
+    "5.0GHz": "5GHz Temperature",
+    "CPU": "CPU Temperature",
+}
 
 
 class AsusWrtSensorDataHandler:
@@ -176,7 +198,7 @@ class AsusWrtRouter:
 
         self._on_close: list[Callable] = []
 
-        self._options: dict[str, Any] = {
+        self._options: dict[str, str | bool | int] = {
             CONF_DNSMASQ: DEFAULT_DNSMASQ,
             CONF_INTERFACE: DEFAULT_INTERFACE,
             CONF_REQUIRE_IP: True,
@@ -189,20 +211,6 @@ class AsusWrtRouter:
 
     def _migrate_entities_unique_id(self) -> None:
         """Migrate router entities to new unique id format."""
-        _ENTITY_MIGRATION_ID = {
-            "sensor_connected_device": "Devices Connected",
-            "sensor_rx_bytes": "Download",
-            "sensor_tx_bytes": "Upload",
-            "sensor_rx_rates": "Download Speed",
-            "sensor_tx_rates": "Upload Speed",
-            "sensor_load_avg1": "Load Avg (1m)",
-            "sensor_load_avg5": "Load Avg (5m)",
-            "sensor_load_avg15": "Load Avg (15m)",
-            "2.4GHz": "2.4GHz Temperature",
-            "5.0GHz": "5GHz Temperature",
-            "CPU": "CPU Temperature",
-        }
-
         entity_reg = er.async_get(self.hass)
         router_entries = er.async_entries_for_config_entry(
             entity_reg, self._entry.entry_id
@@ -299,12 +307,10 @@ class AsusWrtRouter:
             _LOGGER.warning("Reconnected to ASUS router %s", self.host)
 
         self._connected_devices = len(wrt_devices)
-        consider_home: int = self._options.get(
-            CONF_CONSIDER_HOME, DEFAULT_CONSIDER_HOME.total_seconds()
+        consider_home = int(
+            self._options.get(CONF_CONSIDER_HOME, DEFAULT_CONSIDER_HOME.total_seconds())
         )
-        track_unknown: bool = self._options.get(
-            CONF_TRACK_UNKNOWN, DEFAULT_TRACK_UNKNOWN
-        )
+        track_unknown = self._options.get(CONF_TRACK_UNKNOWN, DEFAULT_TRACK_UNKNOWN)
 
         for device_mac, device in self._devices.items():
             dev_info = wrt_devices.pop(device_mac, None)
@@ -388,12 +394,16 @@ class AsusWrtRouter:
     def device_info(self) -> DeviceInfo:
         """Return the device information."""
         info = DeviceInfo(
-            identifiers={(DOMAIN, self._entry.unique_id or "AsusWRT")},
+            configuration_url=self._api.configuration_url,
+            identifiers={get_device_identifier(self._entry)},
             name=self.host,
             model=self._api.model or "Asus Router",
+            model_id=self._api.model_id,
+            serial_number=self._api.serial_number,
             manufacturer="Asus",
-            configuration_url=f"http://{self.host}",
         )
+        if label_mac := self._api.label_mac:
+            info["connections"] = {(CONNECTION_NETWORK_MAC, label_mac)}
         if self._api.firmware:
             info["sw_version"] = self._api.firmware
 

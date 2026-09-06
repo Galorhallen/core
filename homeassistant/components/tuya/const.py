@@ -1,27 +1,23 @@
 """Constants for the Tuya integration."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from enum import StrEnum
 import logging
 
 from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.const import (
-    CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
-    CONCENTRATION_MILLIGRAMS_PER_CUBIC_METER,
-    CONCENTRATION_PARTS_PER_BILLION,
-    CONCENTRATION_PARTS_PER_MILLION,
     LIGHT_LUX,
-    PERCENTAGE,
     SIGNAL_STRENGTH_DECIBELS,
     SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
     Platform,
+    UnitOfConductivity,
+    UnitOfDensity,
     UnitOfElectricCurrent,
     UnitOfElectricPotential,
     UnitOfEnergy,
     UnitOfPower,
     UnitOfPressure,
+    UnitOfRatio,
     UnitOfTemperature,
     UnitOfVolume,
     UnitOfVolumetricFlux,
@@ -30,12 +26,10 @@ from homeassistant.const import (
 DOMAIN = "tuya"
 LOGGER = logging.getLogger(__package__)
 
-CONF_APP_TYPE = "tuya_app_type"
 CONF_ENDPOINT = "endpoint"
 CONF_TERMINAL_ID = "terminal_id"
 CONF_TOKEN_INFO = "token_info"
 CONF_USER_CODE = "user_code"
-CONF_USERNAME = "username"
 
 TUYA_CLIENT_ID = "HA_3y9q4ak7g4ephrvke"
 TUYA_SCHEMA = "haauthorize"
@@ -48,6 +42,9 @@ TUYA_RESPONSE_MSG = "msg"
 TUYA_RESPONSE_QR_CODE = "qrcode"
 TUYA_RESPONSE_RESULT = "result"
 TUYA_RESPONSE_SUCCESS = "success"
+
+CELSIUS_ALIASES = {"°c", "c", "celsius", "℃"}
+FAHRENHEIT_ALIASES = {"°f", "f", "fahrenheit", "℉"}
 
 PLATFORMS = [
     Platform.ALARM_CONTROL_PANEL,
@@ -80,16 +77,509 @@ class WorkMode(StrEnum):
     WHITE = "white"
 
 
-class DPType(StrEnum):
-    """Data point types."""
+class DeviceCategory(StrEnum):
+    """Tuya device categories.
 
-    BITMAP = "Bitmap"
-    BOOLEAN = "Boolean"
-    ENUM = "Enum"
-    INTEGER = "Integer"
-    JSON = "Json"
-    RAW = "Raw"
-    STRING = "String"
+    https://developer.tuya.com/en/docs/iot/standarddescription?id=K9i5ql6waswzq
+    """
+
+    AMY = "amy"
+    """Massage chair"""
+    BGL = "bgl"
+    """Wall-hung boiler"""
+    BH = "bh"
+    """Smart kettle
+
+    https://developer.tuya.com/en/docs/iot/fbh?id=K9gf484m21yq7
+    """
+    BX = "bx"
+    """Refrigerator"""
+    BXX = "bxx"
+    """Safe box"""
+    CJKG = "cjkg"
+    """Scene switch"""
+    CKMKZQ = "ckmkzq"
+    """Garage door opener
+
+    https://developer.tuya.com/en/docs/iot/categoryckmkzq?id=Kaiuz0ipcboee
+    """
+    CKQDKG = "ckqdkg"
+    """Card switch"""
+    CL = "cl"
+    """Curtain
+
+    https://developer.tuya.com/en/docs/iot/categorycl?id=Kaiuz1hnpo7df
+    """
+    CLKG = "clkg"
+    """Curtain switch
+
+    https://developer.tuya.com/en/docs/iot/category-clkg?id=Kaiuz0gitil39
+    """
+    CN = "cn"
+    """Milk dispenser"""
+    CO2BJ = "co2bj"
+    """CO2 detector
+
+    https://developer.tuya.com/en/docs/iot/categoryco2bj?id=Kaiuz3wes7yuy
+    """
+    COBJ = "cobj"
+    """CO detector
+
+    https://developer.tuya.com/en/docs/iot/categorycobj?id=Kaiuz3u1j6q1v
+    """
+    CS = "cs"
+    """Dehumidifier
+
+    https://developer.tuya.com/en/docs/iot/categorycs?id=Kaiuz1vcz4dha
+    """
+    CWTSWSQ = "cwtswsq"
+    """Pet treat feeder"""
+    CWWQFSQ = "cwwqfsq"
+    """Pet ball thrower"""
+    CWWSQ = "cwwsq"
+    """Pet feeder
+
+    https://developer.tuya.com/en/docs/iot/categorycwwsq?id=Kaiuz2b6vydld
+    """
+    CWYSJ = "cwysj"
+    """Pet fountain
+
+    https://developer.tuya.com/en/docs/iot/categorycwysj?id=Kaiuz2dfro0nd
+    """
+    CZ = "cz"
+    """Socket"""
+    DBL = "dbl"
+    """Electric fireplace
+
+    https://developer.tuya.com/en/docs/iot/electric-fireplace?id=Kaiuz2hz4iyp6
+    """
+    DC = "dc"
+    """String lights
+
+    # https://developer.tuya.com/en/docs/iot/dc?id=Kaof7taxmvadu
+    """
+    DCL = "dcl"
+    """Induction cooker"""
+    DD = "dd"
+    """Strip lights
+
+    https://developer.tuya.com/en/docs/iot/dd?id=Kaof804aibg2l
+    """
+    DGNBJ = "dgnbj"
+    """Multi-functional alarm
+
+    https://developer.tuya.com/en/docs/iot/categorydgnbj?id=Kaiuz3yorvzg3
+    """
+    DJ = "dj"
+    """Light
+
+    https://developer.tuya.com/en/docs/iot/categorydj?id=Kaiuyzy3eheyy
+    """
+    DLQ = "dlq"
+    """Circuit breaker
+
+    https://developer.tuya.com/en/docs/iot/dlq?id=Kb0kidk9enyh8
+    """
+    DR = "dr"
+    """Electric blanket
+
+    https://developer.tuya.com/en/docs/iot/categorydr?id=Kaiuz22dyc66p
+    """
+    DS = "ds"
+    """TV set"""
+    FS = "fs"
+    """Fan
+
+    https://developer.tuya.com/en/docs/iot/categoryfs?id=Kaiuz1xweel1c
+    """
+    FSD = "fsd"
+    """Ceiling fan light
+
+    https://developer.tuya.com/en/docs/iot/fsd?id=Kaof8eiei4c2v
+    """
+    FWD = "fwd"
+    """Ambiance light
+
+    https://developer.tuya.com/en/docs/iot/ambient-light?id=Kaiuz06amhe6g
+    """
+    GGQ = "ggq"
+    """Irrigator
+
+    https://developer.tuya.com/en/docs/iot/categoryggq?id=Kaiuz1qib7z0k
+    """
+    GYD = "gyd"
+    """Motion sensor light
+
+    https://developer.tuya.com/en/docs/iot/gyd?id=Kaof8a8hycfmy
+    """
+    GYMS = "gyms"
+    """Business lock"""
+    HOTELMS = "hotelms"
+    """Hotel lock"""
+    HPS = "hps"
+    """Human presence sensor
+
+    https://developer.tuya.com/en/docs/iot/categoryhps?id=Kaiuz42yhn1hs
+    """
+    JS = "js"
+    """Water purifier"""
+    JSQ = "jsq"
+    """Humidifier
+
+    https://developer.tuya.com/en/docs/iot/categoryjsq?id=Kaiuz1smr440b
+    """
+    JTMSBH = "jtmsbh"
+    """Smart lock (keep alive)"""
+    JTMSPRO = "jtmspro"
+    """Residential lock pro"""
+    JWBJ = "jwbj"
+    """Methane detector
+
+    https://developer.tuya.com/en/docs/iot/categoryjwbj?id=Kaiuz40u98lkm
+    """
+    KFJ = "kfj"
+    """Coffee maker
+
+    https://developer.tuya.com/en/docs/iot/categorykfj?id=Kaiuz2p12pc7f
+    """
+    KG = "kg"
+    """Switch
+
+    https://developer.tuya.com/en/docs/iot/s?id=K9gf7o5prgf7s
+    """
+    KJ = "kj"
+    """Air purifier
+
+    https://developer.tuya.com/en/docs/iot/f?id=K9gf46h2s6dzm
+    """
+    KQZG = "kqzg"
+    """Air fryer"""
+    KT = "kt"
+    """Air conditioner
+
+    https://developer.tuya.com/en/docs/iot/categorykt?id=Kaiuz0z71ov2n
+    """
+    KTKZQ = "ktkzq"
+    """Air conditioner controller"""
+    LDCG = "ldcg"
+    """Luminance sensor
+
+    https://developer.tuya.com/en/docs/iot/categoryldcg?id=Kaiuz3n7u69l8
+    """
+    LILIAO = "liliao"
+    """Physiotherapy product"""
+    LYJ = "lyj"
+    """Drying rack"""
+    MAL = "mal"
+    """Alarm host
+
+    https://developer.tuya.com/en/docs/iot/categorymal?id=Kaiuz33clqxaf
+    """
+    MB = "mb"
+    """Bread maker"""
+    MC = "mc"
+    """Door/window controller
+
+    https://developer.tuya.com/en/docs/iot/s?id=K9gf48r5zjsy9
+    """
+    MCS = "mcs"
+    """Contact sensor
+
+    https://developer.tuya.com/en/docs/iot/s?id=K9gf48hm02l8m
+    """
+    MG = "mg"
+    """Rice cabinet"""
+    MJJ = "mjj"
+    """Towel rack"""
+    MK = "mk"
+    """Access control
+
+    https://developer.tuya.com/en/docs/iot/s?id=Kb0o2xhlkxbet
+    """
+    MS = "ms"
+    """Residential lock"""
+    MS_CATEGORY = "ms_category"
+    """Lock accessories"""
+    MSP = "msp"
+    """Cat toilet
+
+    https://developer.tuya.com/en/docs/iot/s?id=Kakg3srr4ora7
+    """
+    MZJ = "mzj"
+    """Sous vide cooker
+
+    https://developer.tuya.com/en/docs/iot/categorymzj?id=Kaiuz2vy130ux
+    """
+    NNQ = "nnq"
+    """Bottle warmer"""
+    NTQ = "ntq"
+    """HVAC"""
+    PC = "pc"
+    """Power strip
+
+    https://developer.tuya.com/en/docs/iot/s?id=K9gf7o5prgf7s
+    """
+    PHOTOLOCK = "photolock"
+    """Audio and video lock"""
+    PIR = "pir"
+    """Human motion sensor
+
+    https://developer.tuya.com/en/docs/iot/categorypir?id=Kaiuz3ss11b80
+    """
+    PM2_5 = "pm2.5"
+    """PM2.5 detector
+
+    https://developer.tuya.com/en/docs/iot/categorypm25?id=Kaiuz3qof3yfu
+    """
+    QN = "qn"
+    """Heater
+
+    https://developer.tuya.com/en/docs/iot/categoryqn?id=Kaiuz18kih0sm
+    """
+    RQBJ = "rqbj"
+    """Gas alarm
+
+    https://developer.tuya.com/en/docs/iot/categoryrqbj?id=Kaiuz3d162ubw
+    """
+    RS = "rs"
+    """Water heater
+
+    https://developer.tuya.com/en/docs/iot/categoryrs?id=Kaiuz0nfferyx
+    """
+    SB = "sb"
+    """Watch/band"""
+    SD = "sd"
+    """Robot vacuum
+
+    https://developer.tuya.com/en/docs/iot/fsd?id=K9gf487ck1tlo
+    """
+    SF = "sf"
+    """Sofa"""
+    SGBJ = "sgbj"
+    """Siren alarm
+
+    https://developer.tuya.com/en/docs/iot/categorysgbj?id=Kaiuz37tlpbnu
+    """
+    SJ = "sj"
+    """Water leak detector
+
+    https://developer.tuya.com/en/docs/iot/categorysj?id=Kaiuz3iub2sli
+    """
+    SOS = "sos"
+    """Emergency button
+
+    https://developer.tuya.com/en/docs/iot/categorysos?id=Kaiuz3oi6agjy
+    """
+    SP = "sp"
+    """Smart camera
+
+    https://developer.tuya.com/en/docs/iot/categorysp?id=Kaiuz35leyo12
+    """
+    SZ = "sz"
+    """Smart indoor garden
+
+    https://developer.tuya.com/en/docs/iot/categorysz?id=Kaiuz4e6h7up0
+    """
+    TGKG = "tgkg"
+    """Dimmer switch
+
+    https://developer.tuya.com/en/docs/iot/categorytgkg?id=Kaiuz0ktx7m0o
+    """
+    TGQ = "tgq"
+    """Dimmer
+
+    https://developer.tuya.com/en/docs/iot/categorytgkg?id=Kaiuz0ktx7m0o
+    """
+    TNQ = "tnq"
+    """Smart milk kettle"""
+    TRACKER = "tracker"
+    """Tracker"""
+    TS = "ts"
+    """Smart jump rope"""
+    TYNDJ = "tyndj"
+    """Solar light
+
+    https://developer.tuya.com/en/docs/iot/tynd?id=Kaof8j02e1t98
+    """
+    TYY = "tyy"
+    """Projector"""
+    TZC1 = "tzc1"
+    """Body fat scale"""
+    VIDEOLOCK = "videolock"
+    """Lock with camera"""
+    WK = "wk"
+    """Thermostat
+
+    https://developer.tuya.com/en/docs/iot/f?id=K9gf45ld5l0t9
+    """
+    WSDCG = "wsdcg"
+    """Temperature and humidity sensor
+
+    https://developer.tuya.com/en/docs/iot/categorywsdcg?id=Kaiuz3hinij34
+    """
+    XDD = "xdd"
+    """Ceiling light
+
+    https://developer.tuya.com/en/docs/iot/ceiling-light?id=Kaiuz03xxfc4r
+    """
+    XFJ = "xfj"
+    """Ventilation system"""
+    XXJ = "xxj"
+    """Diffuser
+
+    https://developer.tuya.com/en/docs/iot/categoryxxj?id=Kaiuz1f9mo6bl
+    """
+    XY = "xy"
+    """Washing machine"""
+    YB = "yb"
+    """Bathroom heater"""
+    YG = "yg"
+    """Bathtub"""
+    YKQ = "ykq"
+    """Remote control
+
+    https://developer.tuya.com/en/docs/iot/ykq?id=Kaof8ljn81aov
+    """
+    YLCG = "ylcg"
+    """Pressure sensor
+
+    https://developer.tuya.com/en/docs/iot/categoryylcg?id=Kaiuz3kc2e4gm
+    """
+    YWBJ = "ywbj"
+    """Smoke alarm
+
+    https://developer.tuya.com/en/docs/iot/categoryywbj?id=Kaiuz3f6sf952
+    """
+    ZD = "zd"
+    """Vibration sensor
+
+    https://developer.tuya.com/en/docs/iot/categoryzd?id=Kaiuz3a5vrzno
+    """
+    ZNDB = "zndb"
+    """Smart electricity meter
+
+    https://developer.tuya.com/en/docs/iot/smart-meter?id=Kaiuz4gv6ack7
+    """
+    ZNFH = "znfh"
+    """Bento box"""
+    ZNSB = "znsb"
+    """Smart water meter"""
+    ZNYH = "znyh"
+    """Smart pill box"""
+
+    # Undocumented
+    AQCZ = "aqcz"
+    """Single Phase power meter (undocumented)"""
+    BZYD = "bzyd"
+    """White noise machine (undocumented)"""
+    CWJWQ = "cwjwq"
+    """Smart Odor Eliminator-Pro (undocumented)
+
+    see https://github.com/orgs/home-assistant/discussions/79
+    """
+    DGHSXJ = "dghsxj"
+    """Smart Camera - Low power consumption camera (undocumented)
+
+    see https://github.com/home-assistant/core/issues/132844
+    """
+    DSD = "dsd"
+    """Filament Light
+
+    Based on data from https://github.com/home-assistant/core/issues/106703
+    Product category mentioned in https://developer.tuya.com/en/docs/iot/oemapp-light?id=Kb77kja5woao6
+    As at 30/12/23 not documented in https://developer.tuya.com/en/docs/iot/lighting?id=Kaiuyzxq30wmc
+    """
+    FSKG = "fskg"
+    """Fan wall switch (undocumented)"""
+    HCDD = "hcdd"
+    """Chasing tape light (undocumented)"""
+    HJJCY = "hjjcy"
+    """Air Quality Monitor
+
+    https://developer.tuya.com/en/docs/iot/hjjcy?id=Kbeoad8y1nnlv
+    """
+    HXD = "hxd"
+    """Wake Up Light II (undocumented)"""
+    JDCLJQR = "jdcljqr"
+    """Curtain Robot (undocumented)"""
+    JQBJ = "jqbj"
+    """Formaldehyde Detector (undocumented)"""
+    KS = "ks"
+    """Tower fan (undocumented)
+
+    See https://github.com/orgs/home-assistant/discussions/329
+    """
+    MBD = "mbd"
+    """Unknown light product
+
+    Found as VECINO RGBW as provided by diagnostics
+    """
+    QCCDZ = "qccdz"
+    """AC charging (undocumented)"""
+    QJDCZ = "qjdcz"
+    """ Unknown product with light capabilities
+
+    Found in some diffusers, plugs and PIR flood lights
+    """
+    QXJ = "qxj"
+    """Temperature and Humidity Sensor with External Probe (undocumented)
+
+    see https://github.com/home-assistant/core/issues/136472
+    """
+    SFKZQ = "sfkzq"
+    """Smart Water Timer (undocumented)"""
+    SJZ = "sjz"
+    """Electric desk (undocumented)"""
+    SZJCY = "szjcy"
+    """Water tester (undocumented)"""
+    SZJQR = "szjqr"
+    """Fingerbot (undocumented)"""
+    SWTZ = "swtz"
+    """Cooking thermometer (undocumented)"""
+    TDQ = "tdq"
+    """Dimmer (undocumented)"""
+    TYD = "tyd"
+    """Outdoor flood light (undocumented)"""
+    VOC = "voc"
+    """Volatile Organic Compound Sensor (undocumented)"""
+    WG2 = "wg2"  # Documented, but not in official list
+    """Gateway control
+
+    https://developer.tuya.com/en/docs/iot/wg?id=Kbcdadk79ejok
+    """
+    WKCZ = "wkcz"
+    """Two-way temperature and humidity switch (undocumented)
+
+    "MOES Temperature and Humidity Smart Switch Module MS-103"
+    """
+    WKF = "wkf"
+    """Thermostatic Radiator Valve (undocumented)"""
+    WNYKQ = "wnykq"
+    """Smart WiFi IR Remote (undocumented)
+
+    eMylo Smart WiFi IR Remote
+    Air Conditioner Mate (Smart IR Socket)
+    """
+    WXKG = "wxkg"  # Documented, but not in official list
+    """Wireless Switch
+
+    https://developer.tuya.com/en/docs/iot/s?id=Kbeoa9fkv6brp
+    """
+    XNYJCN = "xnyjcn"
+    """Micro Storage Inverter
+
+        Energy storage and solar PV inverter system with monitoring capabilities
+    """
+    YWCGQ = "ywcgq"
+    """Tank Level Sensor (undocumented)"""
+    ZNNBQ = "znnbq"
+    """VESKA-micro inverter (undocumented)"""
+    ZWJCY = "zwjcy"
+    """Soil sensor - plant monitor (undocumented)"""
+    ZNJXS = "znjxs"
+    """Hejhome whitelabel Fingerbot (undocumented)"""
+    ZNRB = "znrb"
+    """Pool HeatPump (undocumented)"""
 
 
 class DPCode(StrEnum):
@@ -98,20 +588,25 @@ class DPCode(StrEnum):
     https://developer.tuya.com/en/docs/iot/standarddescription?id=K9i5ql6waswzq
     """
 
+    ADD_ELE = "add_ele"  # energy
     AIR_QUALITY = "air_quality"
     AIR_QUALITY_INDEX = "air_quality_index"
     ALARM_DELAY_TIME = "alarm_delay_time"
     ALARM_MESSAGE = "alarm_message"
     ALARM_MSG = "alarm_msg"
+    ALARM_STATE = "alarm_state"
     ALARM_SWITCH = "alarm_switch"  # Alarm switch
     ALARM_TIME = "alarm_time"  # Alarm time
     ALARM_VOLUME = "alarm_volume"  # Alarm volume
+    ALL_ENERGY = "all_energy"  # Combined energy of all channels
     ANGLE_HORIZONTAL = "angle_horizontal"
     ANGLE_VERTICAL = "angle_vertical"
     ANION = "anion"  # Ionizer unit
     ARM_DOWN_PERCENT = "arm_down_percent"
     ARM_UP_PERCENT = "arm_up_percent"
     ATMOSPHERIC_PRESSTURE = "atmospheric_pressture"  # Typo is in Tuya API
+    AUTO_CLEAN = "auto_clean"
+    BACKUP_RESERVE = "backup_reserve"
     BASIC_ANTI_FLICKER = "basic_anti_flicker"
     BASIC_DEVICE_VOLUME = "basic_device_volume"
     BASIC_FLIP = "basic_flip"
@@ -122,6 +617,7 @@ class DPCode(StrEnum):
     BASIC_WDR = "basic_wdr"
     BATTERY = "battery"  # Used by non-standard contact sensor implementations
     BATTERY_PERCENTAGE = "battery_percentage"  # Battery percentage
+    BATTERY_POWER = "battery_power"
     BATTERY_STATE = "battery_state"  # Battery state
     BATTERY_VALUE = "battery_value"  # Battery value
     BRIGHT_CONTROLLER = "bright_controller"
@@ -138,10 +634,12 @@ class DPCode(StrEnum):
     BRIGHTNESS_MIN_2 = "brightness_min_2"
     BRIGHTNESS_MIN_3 = "brightness_min_3"
     C_F = "c_f"  # Temperature unit switching
+    CAT_WEIGHT = "cat_weight"
     CH2O_STATE = "ch2o_state"
     CH2O_VALUE = "ch2o_value"
     CH4_SENSOR_STATE = "ch4_sensor_state"
     CH4_SENSOR_VALUE = "ch4_sensor_value"
+    CHARGE_STATE = "charge_state"
     CHILD_LOCK = "child_lock"  # Child lock
     CISTERN = "cistern"
     CLEAN_AREA = "clean_area"
@@ -159,6 +657,7 @@ class DPCode(StrEnum):
     COLOUR_DATA = "colour_data"  # Colored light mode
     COLOUR_DATA_HSV = "colour_data_hsv"  # Colored light mode
     COLOUR_DATA_V2 = "colour_data_v2"  # Colored light mode
+    COMPRESSOR_STRENGTH = "compressor_strength"
     CONCENTRATION_SET = "concentration_set"  # Concentration setting
     CONTROL = "control"
     CONTROL_2 = "control_2"
@@ -166,6 +665,7 @@ class DPCode(StrEnum):
     CONTROL_BACK = "control_back"
     CONTROL_BACK_MODE = "control_back_mode"
     COOK_TEMPERATURE = "cook_temperature"
+    COOK_TEMPERATURE_2 = "cook_temperature_2"
     COOK_TIME = "cook_time"
     COUNTDOWN = "countdown"  # Countdown
     COUNTDOWN_1 = "countdown_1"
@@ -179,25 +679,48 @@ class DPCode(StrEnum):
     COUNTDOWN_LEFT = "countdown_left"
     COUNTDOWN_SET = "countdown_set"  # Countdown setting
     CRY_DETECTION_SWITCH = "cry_detection_switch"
+    CUML_E_EXPORT_OFFGRID1 = "cuml_e_export_offgrid1"
+    CUMULATIVE_ENERGY_CHARGED = "cumulative_energy_charged"
+    CUMULATIVE_ENERGY_DISCHARGED = "cumulative_energy_discharged"
+    CUMULATIVE_ENERGY_GENERATED_PV = "cumulative_energy_generated_pv"
+    CUMULATIVE_ENERGY_OUTPUT_INV = "cumulative_energy_output_inv"
     CUP_NUMBER = "cup_number"  # NUmber of cups
     CUR_CURRENT = "cur_current"  # Actual current
+    CUR_CURRENT1 = "cur_current1"  # Actual current, channel 1
+    CUR_CURRENT2 = "cur_current2"  # Actual current, channel 2
     CUR_NEUTRAL = "cur_neutral"  # Total reverse energy
     CUR_POWER = "cur_power"  # Actual power
+    CUR_POWER1 = "cur_power1"  # Actual power, channel 1
+    CUR_POWER2 = "cur_power2"  # Actual power, channel 2
     CUR_VOLTAGE = "cur_voltage"  # Actual voltage
+    CUR_VOLTAGE1 = "cur_voltage1"  # Actual voltage, channel 1
+    CUR_VOLTAGE2 = "cur_voltage2"  # Actual voltage, channel 2
+    CURRENT_SOC = "current_soc"
     DECIBEL_SENSITIVITY = "decibel_sensitivity"
     DECIBEL_SWITCH = "decibel_switch"
     DEHUMIDITY_SET_ENUM = "dehumidify_set_enum"
     DEHUMIDITY_SET_VALUE = "dehumidify_set_value"
+    DELAY_CLEAN_TIME = "delay_clean_time"
     DELAY_SET = "delay_set"
+    DEVICE_RESTART = "device_restart"
+    DEVICE_STATE1 = "device_state1"  # Channel 1 monitoring state
+    DEVICE_STATE2 = "device_state2"  # Channel 2 monitoring state
+    DEW_POINT_TEMP = "dew_point_temp"
     DISINFECTION = "disinfection"
     DO_NOT_DISTURB = "do_not_disturb"
+    DOORBELL_PIC = "doorbell_pic"
     DOORCONTACT_STATE = "doorcontact_state"  # Status of door window sensor
     DOORCONTACT_STATE_2 = "doorcontact_state_2"
     DOORCONTACT_STATE_3 = "doorcontact_state_3"
     DUSTER_CLOTH = "duster_cloth"
+    EC_CURRENT = "ec_current"
     ECO2 = "eco2"
     EDGE_BRUSH = "edge_brush"
     ELECTRICITY_LEFT = "electricity_left"
+    EXCRETION_TIME_DAY = "excretion_time_day"
+    EXCRETION_TIMES_DAY = "excretion_times_day"
+    EXT_TEMP = "ext_temp"
+    FACTORY_RESET = "factory_reset"
     FAN_BEEP = "fan_beep"  # Sound
     FAN_COOL = "fan_cool"  # Cool wind
     FAN_DIRECTION = "fan_direction"  # Fan direction
@@ -212,6 +735,8 @@ class DPCode(StrEnum):
     FAULT = "fault"
     FEED_REPORT = "feed_report"
     FEED_STATE = "feed_state"
+    FEEDIN_POWER_LIMIT_ENABLE = "feedin_power_limit_enable"
+    FEELLIKE_TEMP = "feellike_temp"
     FILTER = "filter"
     FILTER_DURATION = "filter_life"  # Filter duration (hours)
     FILTER_LIFE = "filter"  # Filter life (percentage)
@@ -223,6 +748,7 @@ class DPCode(StrEnum):
     GAS_SENSOR_STATE = "gas_sensor_state"
     GAS_SENSOR_STATUS = "gas_sensor_status"
     GAS_SENSOR_VALUE = "gas_sensor_value"
+    HEAT_INDEX = "heat_index"
     HUMIDIFIER = "humidifier"  # Humidification
     HUMIDITY = "humidity"  # Humidity
     HUMIDITY_CURRENT = "humidity_current"  # Current humidity
@@ -234,6 +760,11 @@ class DPCode(StrEnum):
     HUMIDITY_SET = "humidity_set"  # Humidity setting
     HUMIDITY_VALUE = "humidity_value"  # Humidity
     INSTALLATION_HEIGHT = "installation_height"
+    INVERTER_OUTPUT_POWER = "inverter_output_power"
+    IPC_AUTO_SIREN = "ipc_auto_siren"
+    IPC_BRIGHT = "ipc_bright"
+    IPC_CONTRAST = "ipc_contrast"
+    IPC_SHARP = "ipc_sharp"
     IPC_WORK_MODE = "ipc_work_mode"
     LED_TYPE_1 = "led_type_1"
     LED_TYPE_2 = "led_type_2"
@@ -250,6 +781,7 @@ class DPCode(StrEnum):
     LIQUID_STATE = "liquid_state"
     LOCK = "lock"  # Lock / Child lock
     MACH_OPERATE = "mach_operate"
+    MANUAL_CLEAN = "manual_clean"
     MANUAL_FEED = "manual_feed"
     MASTER_MODE = "master_mode"  # alarm mode
     MASTER_STATE = "master_state"  # alarm state
@@ -258,6 +790,7 @@ class DPCode(StrEnum):
     MINI_SET = "mini_set"
     MODE = "mode"  # Working mode / Mode
     MOODLIGHTING = "moodlighting"  # Mood light
+    MOTION_AREA_SWITCH = "motion_area_switch"  # Activity area
     MOTION_RECORD = "motion_record"
     MOTION_SENSITIVITY = "motion_sensitivity"
     MOTION_SWITCH = "motion_switch"  # Motion switch
@@ -266,6 +799,8 @@ class DPCode(StrEnum):
     MUFFLING = "muffling"  # Muffling
     NEAR_DETECTION = "near_detection"
     OPPOSITE = "opposite"
+    ORP_CURRENT = "orp_current"
+    OUTPUT_POWER_LIMIT = "output_power_limit"
     OXYGEN = "oxygen"  # Oxygen bar
     PAUSE = "pause"
     PERCENT_CONTROL = "percent_control"
@@ -277,6 +812,7 @@ class DPCode(StrEnum):
     PHASE_A = "phase_a"
     PHASE_B = "phase_b"
     PHASE_C = "phase_c"
+    PH_CURRENT = "ph_current"
     PIR = "pir"  # Motion sensor
     PM1 = "pm1"
     PM10 = "pm10"
@@ -294,9 +830,13 @@ class DPCode(StrEnum):
     PRESENCE_STATE = "presence_state"
     PRESSURE_STATE = "pressure_state"
     PRESSURE_VALUE = "pressure_value"
+    PRO_ADD_ELE = "pro_add_ele"  # Produce energy
     PUMP = "pump"
     PUMP_RESET = "pump_reset"  # Water pump reset
     PUMP_TIME = "pump_time"  # Water pump duration
+    PV_POWER_CHANNEL_1 = "pv_power_channel_1"
+    PV_POWER_CHANNEL_2 = "pv_power_channel_2"
+    PV_POWER_TOTAL = "pv_power_total"
     RAIN_24H = "rain_24h"  # Total daily rainfall in mm
     RAIN_RATE = "rain_rate"  # Rain intensity in mm/h
     RECORD_MODE = "record_mode"
@@ -323,6 +863,7 @@ class DPCode(StrEnum):
     SMOKE_SENSOR_STATE = "smoke_sensor_state"
     SMOKE_SENSOR_STATUS = "smoke_sensor_status"
     SMOKE_SENSOR_VALUE = "smoke_sensor_value"
+    SNOOZE = "snooze"
     SOS = "sos"  # Emergency State
     SOS_STATE = "sos_state"  # Emergency mode
     SPEED = "speed"  # Speed level
@@ -363,6 +904,7 @@ class DPCode(StrEnum):
     SWITCH_MODE7 = "switch_mode7"
     SWITCH_MODE8 = "switch_mode8"
     SWITCH_MODE9 = "switch_mode9"
+    SWITCH_MUSIC = "switch_music"
     SWITCH_NIGHT_LIGHT = "switch_night_light"
     SWITCH_SAVE_ENERGY = "switch_save_energy"
     SWITCH_SOUND = "switch_sound"  # Voice switch
@@ -376,12 +918,16 @@ class DPCode(StrEnum):
     SWITCH_VERTICAL = "switch_vertical"  # Vertical swing flap switch
     SWITCH_VOICE = "switch_voice"  # Voice switch
     TARGET_DIS_CLOSEST = "target_dis_closest"  # Closest target distance
+    TDS_IN = "tds_in"  # Total dissolved solids
     TEMP = "temp"  # Temperature setting
+    TEMP_AROUND = "temp_around"  # Current around (outside) temperature
     TEMP_BOILING_C = "temp_boiling_c"
     TEMP_BOILING_F = "temp_boiling_f"
+    TEMP_COILER = "temp_coiler"  # Current coil temperature
     TEMP_CONTROLLER = "temp_controller"
     TEMP_CORRECTION = "temp_correction"
     TEMP_CURRENT = "temp_current"  # Current temperature in °C
+    TEMP_CURRENT_2 = "temp_current_2"
     TEMP_CURRENT_EXTERNAL = (
         "temp_current_external"  # Current external temperature in Celsius
     )
@@ -398,25 +944,34 @@ class DPCode(StrEnum):
         "temp_current_external_f"  # Current external temperature in Fahrenheit
     )
     TEMP_CURRENT_F = "temp_current_f"  # Current temperature in °F
+    TEMP_EFFLUENT = "temp_effluent"  # Current flow temperature
     TEMP_INDOOR = "temp_indoor"  # Indoor temperature in °C
     TEMP_SET = "temp_set"  # Set the temperature in °C
     TEMP_SET_F = "temp_set_f"  # Set the temperature in °F
+    TEMP_SETTING_QUICK_C = "temp_setting_quick_c"
     TEMP_UNIT_CONVERT = "temp_unit_convert"  # Temperature unit switching
     TEMP_VALUE = "temp_value"  # Color temperature
     TEMP_VALUE_V2 = "temp_value_v2"
+    TEMP_VENTING = "temp_venting"  # Current heat plate temperature
     TEMPER_ALARM = "temper_alarm"  # Tamper alarm
     TIME_TOTAL = "time_total"
     TIME_USE = "time_use"  # Total seconds of irrigation
+    TODAY_ACC_ENERGY1 = "today_acc_energy1"  # Energy today, channel 1
+    TODAY_ACC_ENERGY2 = "today_acc_energy2"  # Energy today, channel 2
     TOTAL_CLEAN_AREA = "total_clean_area"
     TOTAL_CLEAN_COUNT = "total_clean_count"
     TOTAL_CLEAN_TIME = "total_clean_time"
+    TOTAL_ENERGY1 = "total_energy1"  # Total energy, channel 1
+    TOTAL_ENERGY2 = "total_energy2"  # Total energy, channel 2
     TOTAL_FORWARD_ENERGY = "total_forward_energy"
     TOTAL_PM = "total_pm"
     TOTAL_POWER = "total_power"
     TOTAL_TIME = "total_time"
     TVOC = "tvoc"
+    UP_DOWN = "up_down"
     UPPER_TEMP = "upper_temp"
     UPPER_TEMP_F = "upper_temp_f"
+    USE_TIME_ONE = "use_time_one"
     UV = "uv"  # UV sterilization
     UV_INDEX = "uv_index"
     UV_RUNTIME = "uv_runtime"  # UV runtime
@@ -431,6 +986,8 @@ class DPCode(StrEnum):
     VOLUME_SET = "volume_set"
     WARM = "warm"  # Heat preservation
     WARM_TIME = "warm_time"  # Heat preservation time
+    WARN_POWER1 = "warn_power1"  # Power warning threshold, channel 1
+    WARN_POWER2 = "warn_power2"  # Power warning threshold, channel 2
     WATER = "water"
     WATER_LEVEL = "water_level"
     WATER_RESET = "water_reset"  # Resetting of water usage days
@@ -441,6 +998,7 @@ class DPCode(StrEnum):
     WET = "wet"  # Humidification
     WINDOW_CHECK = "window_check"
     WINDOW_STATE = "window_state"
+    WINDCHILL_INDEX = "windchill_index"
     WINDSPEED = "windspeed"
     WINDSPEED_AVG = "windspeed_avg"
     WIND_DIRECT = "wind_direct"
@@ -448,7 +1006,9 @@ class DPCode(StrEnum):
     WIRELESS_ELECTRICITY = "wireless_electricity"
     WORK_MODE = "work_mode"  # Working mode
     WORK_POWER = "work_power"
+    WORK_STATE = "work_state"
     WORK_STATE_E = "work_state_e"
+    WORK_TYPE = "work_type"
 
 
 @dataclass
@@ -477,7 +1037,7 @@ UNITS = (
         },
     ),
     UnitOfMeasurement(
-        unit=PERCENTAGE,
+        unit=UnitOfRatio.PERCENTAGE,
         aliases={"pct", "percent", "% RH"},
         device_classes={
             SensorDeviceClass.BATTERY,
@@ -486,14 +1046,14 @@ UNITS = (
         },
     ),
     UnitOfMeasurement(
-        unit=CONCENTRATION_PARTS_PER_MILLION,
+        unit=UnitOfRatio.PARTS_PER_MILLION,
         device_classes={
             SensorDeviceClass.CO,
             SensorDeviceClass.CO2,
         },
     ),
     UnitOfMeasurement(
-        unit=CONCENTRATION_PARTS_PER_BILLION,
+        unit=UnitOfRatio.PARTS_PER_BILLION,
         device_classes={
             SensorDeviceClass.CO,
             SensorDeviceClass.CO2,
@@ -540,7 +1100,7 @@ UNITS = (
         device_classes={SensorDeviceClass.ILLUMINANCE},
     ),
     UnitOfMeasurement(
-        unit=CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        unit=UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
         # The μ-char has 2 unicode variants \u00b5 and \u03bc
         # The \u03bc variant (Greek Mu char) is recommended
         aliases={"ug/m3", "\u03bcg/m3", "\u00b5g/m3", "ug/m³"},
@@ -557,7 +1117,7 @@ UNITS = (
         },
     ),
     UnitOfMeasurement(
-        unit=CONCENTRATION_MILLIGRAMS_PER_CUBIC_METER,
+        unit=UnitOfDensity.MILLIGRAMS_PER_CUBIC_METER,
         aliases={"mg/m3"},
         device_classes={
             SensorDeviceClass.NITROGEN_DIOXIDE,
@@ -620,12 +1180,12 @@ UNITS = (
     ),
     UnitOfMeasurement(
         unit=UnitOfTemperature.CELSIUS,
-        aliases={"°c", "c", "celsius", "℃"},
+        aliases=CELSIUS_ALIASES,
         device_classes={SensorDeviceClass.TEMPERATURE},
     ),
     UnitOfMeasurement(
         unit=UnitOfTemperature.FAHRENHEIT,
-        aliases={"°f", "f", "fahrenheit"},
+        aliases=FAHRENHEIT_ALIASES,
         device_classes={SensorDeviceClass.TEMPERATURE},
     ),
     UnitOfMeasurement(
@@ -637,6 +1197,20 @@ UNITS = (
         unit=UnitOfElectricPotential.MILLIVOLT,
         aliases={"mv", "millivolt"},
         device_classes={SensorDeviceClass.VOLTAGE},
+    ),
+    UnitOfMeasurement(
+        unit="",
+        aliases={"ph"},
+        device_classes={
+            SensorDeviceClass.PH,
+        },
+    ),
+    UnitOfMeasurement(
+        unit=UnitOfConductivity.MICROSIEMENS_PER_CM,
+        aliases={"us"},
+        device_classes={
+            SensorDeviceClass.CONDUCTIVITY,
+        },
     ),
 )
 

@@ -4,7 +4,7 @@ from unittest.mock import ANY, Mock, patch
 
 import pytest
 
-from homeassistant.components.recorder import Recorder, get_instance
+from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.const import SupportedDialect
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
@@ -16,9 +16,9 @@ from tests.typing import RecorderInstanceGenerator
 
 
 @pytest.mark.skip_on_db_engine(["mysql", "postgresql"])
-@pytest.mark.usefixtures("skip_by_db_engine")
+@pytest.mark.usefixtures("skip_by_db_engine", "recorder_mock")
 async def test_recorder_system_health(
-    recorder_mock: Recorder, hass: HomeAssistant, recorder_db_url: str
+    hass: HomeAssistant, recorder_db_url: str
 ) -> None:
     """Test recorder system health.
 
@@ -41,8 +41,8 @@ async def test_recorder_system_health(
 @pytest.mark.parametrize(
     "db_engine", [SupportedDialect.MYSQL, SupportedDialect.POSTGRESQL]
 )
+@pytest.mark.usefixtures("recorder_mock")
 async def test_recorder_system_health_alternate_dbms(
-    recorder_mock: Recorder,
     hass: HomeAssistant,
     db_engine: SupportedDialect,
     recorder_dialect_name: None,
@@ -70,8 +70,8 @@ async def test_recorder_system_health_alternate_dbms(
 @pytest.mark.parametrize(
     "db_engine", [SupportedDialect.MYSQL, SupportedDialect.POSTGRESQL]
 )
+@pytest.mark.usefixtures("recorder_mock")
 async def test_recorder_system_health_db_url_missing_host(
-    recorder_mock: Recorder,
     hass: HomeAssistant,
     db_engine: SupportedDialect,
     recorder_dialect_name: None,
@@ -128,3 +128,42 @@ async def test_recorder_system_health_crashed_recorder_runs_table(
         "database_engine": SupportedDialect.SQLITE.value,
         "database_version": ANY,
     }
+
+
+@pytest.mark.parametrize("db_engine", [SupportedDialect.POSTGRESQL])
+@pytest.mark.parametrize(
+    "db_url",
+    [
+        "postgresql://homeassistant:secret@192.168.0.2:5432/home_assistant",
+        "postgresql://homeassistant:pa#ss@192.168.0.2:5432/home_assistant",
+        "postgresql://homeassistant:pa?ss@192.168.0.2:5432/home_assistant",
+        "postgresql://homeassistant:pa/ss@192.168.0.2:5432/home_assistant",
+    ],
+    ids=["plain", "hash", "question_mark", "slash"],
+)
+@pytest.mark.usefixtures("recorder_mock")
+async def test_recorder_system_health_db_name_with_special_characters(
+    hass: HomeAssistant,
+    db_engine: SupportedDialect,
+    db_url: str,
+    recorder_dialect_name: None,
+) -> None:
+    """Test the database name is read correctly when the password needs escaping.
+
+    Characters that are structural in a generic URL, such as ``#`` and ``?``,
+    must not be allowed to swallow the database name that follows them.
+    """
+    assert await async_setup_component(hass, "system_health", {})
+    await async_wait_recording_done(hass)
+
+    instance = get_instance(hass)
+    with (
+        patch.object(instance, "db_url", db_url),
+        patch(
+            "sqlalchemy.orm.session.Session.execute",
+            return_value=Mock(scalar=Mock(return_value=("1048576"))),
+        ) as execute_mock,
+    ):
+        await get_system_health_info(hass, "recorder")
+
+    assert execute_mock.call_args.args[1] == {"database_name": "home_assistant"}

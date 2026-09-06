@@ -1,10 +1,8 @@
 """Config flow for Switcher integration."""
 
-from __future__ import annotations
-
 from collections.abc import Mapping
 import logging
-from typing import Any, Final
+from typing import Any, Final, override
 
 from aioswitcher.device import SwitcherBase
 from aioswitcher.device.tools import validate_token
@@ -13,7 +11,7 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_TOKEN, CONF_USERNAME
 
-from .const import DOMAIN
+from .const import DOMAIN, PREREQUISITES_URL
 from .utils import async_discover_devices
 
 _LOGGER = logging.getLogger(__name__)
@@ -39,6 +37,7 @@ class SwitcherFlowHandler(ConfigFlow, domain=DOMAIN):
         self.username: str | None = None
         self.token: str | None = None
 
+    @override
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -77,7 +76,10 @@ class SwitcherFlowHandler(ConfigFlow, domain=DOMAIN):
             errors["base"] = "invalid_auth"
 
         return self.async_show_form(
-            step_id="credentials", data_schema=CONFIG_SCHEMA, errors=errors
+            step_id="credentials",
+            data_schema=CONFIG_SCHEMA,
+            errors=errors,
+            description_placeholders={"prerequisites_url": PREREQUISITES_URL},
         )
 
     async def async_step_reauth(
@@ -106,6 +108,7 @@ class SwitcherFlowHandler(ConfigFlow, domain=DOMAIN):
             step_id="reauth_confirm",
             data_schema=CONFIG_SCHEMA,
             errors=errors,
+            description_placeholders={"prerequisites_url": PREREQUISITES_URL},
         )
 
     async def _create_entry(self) -> ConfigFlowResult:

@@ -1,11 +1,9 @@
 """Config flow to configure Xiaomi Miio."""
 
-from __future__ import annotations
-
 from collections.abc import Mapping
 import logging
 from re import search
-from typing import Any
+from typing import Any, override
 
 from micloud import MiCloud
 from micloud.micloudexception import MiCloudAccessDenied
@@ -58,6 +56,10 @@ DEVICE_CLOUD_CONFIG = vol.Schema(
         vol.Optional(CONF_MANUAL, default=False): bool,
     }
 )
+
+CLOUD_STEP_PLACEHOLDERS = {
+    "country_servers_url": "https://www.openhab.org/addons/bindings/miio/#country-servers",
+}
 
 
 class OptionsFlowHandler(OptionsFlowWithReload):
@@ -116,6 +118,7 @@ class XiaomiMiioFlowHandler(ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     @callback
+    @override
     def async_get_options_flow(
         config_entry: XiaomiMiioConfigEntry,
     ) -> OptionsFlowHandler:
@@ -140,12 +143,14 @@ class XiaomiMiioFlowHandler(ConfigFlow, domain=DOMAIN):
             return await self.async_step_cloud()
         return self.async_show_form(step_id="reauth_confirm")
 
+    @override
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Handle a flow initialized by the user."""
         return await self.async_step_cloud()
 
+    @override
     async def async_step_zeroconf(
         self, discovery_info: ZeroconfServiceInfo
     ) -> ConfigFlowResult:
@@ -224,7 +229,10 @@ class XiaomiMiioFlowHandler(ConfigFlow, domain=DOMAIN):
             if not cloud_username or not cloud_password or not cloud_country:
                 errors["base"] = "cloud_credentials_incomplete"
                 return self.async_show_form(
-                    step_id="cloud", data_schema=DEVICE_CLOUD_CONFIG, errors=errors
+                    step_id="cloud",
+                    data_schema=DEVICE_CLOUD_CONFIG,
+                    errors=errors,
+                    description_placeholders=CLOUD_STEP_PLACEHOLDERS,
                 )
 
             miio_cloud = await self.hass.async_add_executor_job(
@@ -241,7 +249,10 @@ class XiaomiMiioFlowHandler(ConfigFlow, domain=DOMAIN):
 
             if errors:
                 return self.async_show_form(
-                    step_id="cloud", data_schema=DEVICE_CLOUD_CONFIG, errors=errors
+                    step_id="cloud",
+                    data_schema=DEVICE_CLOUD_CONFIG,
+                    errors=errors,
+                    description_placeholders=CLOUD_STEP_PLACEHOLDERS,
                 )
 
             try:
@@ -255,7 +266,10 @@ class XiaomiMiioFlowHandler(ConfigFlow, domain=DOMAIN):
             if not devices_raw:
                 errors["base"] = "cloud_no_devices"
                 return self.async_show_form(
-                    step_id="cloud", data_schema=DEVICE_CLOUD_CONFIG, errors=errors
+                    step_id="cloud",
+                    data_schema=DEVICE_CLOUD_CONFIG,
+                    errors=errors,
+                    description_placeholders=CLOUD_STEP_PLACEHOLDERS,
                 )
 
             self.cloud_devices = {}
@@ -284,7 +298,10 @@ class XiaomiMiioFlowHandler(ConfigFlow, domain=DOMAIN):
             return await self.async_step_select()
 
         return self.async_show_form(
-            step_id="cloud", data_schema=DEVICE_CLOUD_CONFIG, errors=errors
+            step_id="cloud",
+            data_schema=DEVICE_CLOUD_CONFIG,
+            errors=errors,
+            description_placeholders=CLOUD_STEP_PLACEHOLDERS,
         )
 
     async def async_step_select(
@@ -322,7 +339,14 @@ class XiaomiMiioFlowHandler(ConfigFlow, domain=DOMAIN):
         else:
             schema = DEVICE_CONFIG
 
-        return self.async_show_form(step_id="manual", data_schema=schema, errors=errors)
+        return self.async_show_form(
+            step_id="manual",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={
+                "retrieving_token_url": "https://www.home-assistant.io/integrations/xiaomi_miio#retrieving-the-access-token",
+            },
+        )
 
     async def async_step_connect(
         self, user_input: dict[str, Any] | None = None

@@ -1,7 +1,11 @@
 """Support for Tuya number."""
 
-from __future__ import annotations
+from typing import override
 
+from tuya_device_handlers.definition.number import (
+    NumberDefinition,
+    get_default_definition,
+)
 from tuya_sharing import CustomerDevice, Manager
 
 from homeassistant.components.number import (
@@ -10,31 +14,24 @@ from homeassistant.components.number import (
     NumberEntity,
     NumberEntityDescription,
 )
-from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfTime
+from homeassistant.const import EntityCategory, UnitOfRatio, UnitOfTime
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from . import TuyaConfigEntry
 from .const import (
     DEVICE_CLASS_UNITS,
-    DOMAIN,
     LOGGER,
     TUYA_DISCOVERY_NEW,
+    DeviceCategory,
     DPCode,
-    DPType,
 )
+from .coordinator import TuyaConfigEntry
 from .entity import TuyaEntity
-from .models import IntegerTypeData
-from .util import ActionDPCodeNotFoundError
+from .util import get_device_temp_unit_convert
 
-# All descriptions can be found here. Mostly the Integer data types in the
-# default instructions set of each category end up being a number.
-# https://developer.tuya.com/en/docs/iot/standarddescription?id=K9i5ql6waswzq
-NUMBERS: dict[str, tuple[NumberEntityDescription, ...]] = {
-    # Smart Kettle
-    # https://developer.tuya.com/en/docs/iot/fbh?id=K9gf484m21yq7
-    "bh": (
+NUMBERS: dict[DeviceCategory, tuple[NumberEntityDescription, ...]] = {
+    DeviceCategory.BH: (
         NumberEntityDescription(
             key=DPCode.TEMP_SET,
             translation_key="temperature",
@@ -65,9 +62,14 @@ NUMBERS: dict[str, tuple[NumberEntityDescription, ...]] = {
             entity_category=EntityCategory.CONFIG,
         ),
     ),
-    # CO2 Detector
-    # https://developer.tuya.com/en/docs/iot/categoryco2bj?id=Kaiuz3wes7yuy
-    "co2bj": (
+    DeviceCategory.BZYD: (
+        NumberEntityDescription(
+            key=DPCode.VOLUME_SET,
+            translation_key="volume",
+            entity_category=EntityCategory.CONFIG,
+        ),
+    ),
+    DeviceCategory.CO2BJ: (
         NumberEntityDescription(
             key=DPCode.ALARM_TIME,
             translation_key="alarm_duration",
@@ -76,9 +78,7 @@ NUMBERS: dict[str, tuple[NumberEntityDescription, ...]] = {
             entity_category=EntityCategory.CONFIG,
         ),
     ),
-    # Smart Pet Feeder
-    # https://developer.tuya.com/en/docs/iot/categorycwwsq?id=Kaiuz2b6vydld
-    "cwwsq": (
+    DeviceCategory.CWWSQ: (
         NumberEntityDescription(
             key=DPCode.MANUAL_FEED,
             translation_key="feed",
@@ -88,27 +88,38 @@ NUMBERS: dict[str, tuple[NumberEntityDescription, ...]] = {
             translation_key="voice_times",
         ),
     ),
-    # Multi-functional Sensor
-    # https://developer.tuya.com/en/docs/iot/categorydgnbj?id=Kaiuz3yorvzg3
-    "dgnbj": (
+    DeviceCategory.CZ: (
+        # Two-channel current transformer meters warn above these thresholds
+        NumberEntityDescription(
+            key=DPCode.WARN_POWER1,
+            translation_key="indexed_power_warning_threshold",
+            translation_placeholders={"index": "1"},
+            device_class=NumberDeviceClass.POWER,
+            entity_category=EntityCategory.CONFIG,
+        ),
+        NumberEntityDescription(
+            key=DPCode.WARN_POWER2,
+            translation_key="indexed_power_warning_threshold",
+            translation_placeholders={"index": "2"},
+            device_class=NumberDeviceClass.POWER,
+            entity_category=EntityCategory.CONFIG,
+        ),
+    ),
+    DeviceCategory.DGNBJ: (
         NumberEntityDescription(
             key=DPCode.ALARM_TIME,
             translation_key="time",
             entity_category=EntityCategory.CONFIG,
         ),
     ),
-    # Fan
-    # https://developer.tuya.com/en/docs/iot/categoryfs?id=Kaiuz1xweel1c
-    "fs": (
+    DeviceCategory.FS: (
         NumberEntityDescription(
             key=DPCode.TEMP,
             translation_key="temperature",
             device_class=NumberDeviceClass.TEMPERATURE,
         ),
     ),
-    # Human Presence Sensor
-    # https://developer.tuya.com/en/docs/iot/categoryhps?id=Kaiuz42yhn1hs
-    "hps": (
+    DeviceCategory.HPS: (
         NumberEntityDescription(
             key=DPCode.SENSITIVITY,
             translation_key="sensitivity",
@@ -132,9 +143,7 @@ NUMBERS: dict[str, tuple[NumberEntityDescription, ...]] = {
             device_class=NumberDeviceClass.DISTANCE,
         ),
     ),
-    # Humidifier
-    # https://developer.tuya.com/en/docs/iot/categoryjsq?id=Kaiuz1smr440b
-    "jsq": (
+    DeviceCategory.JSQ: (
         NumberEntityDescription(
             key=DPCode.TEMP_SET,
             translation_key="temperature",
@@ -146,9 +155,7 @@ NUMBERS: dict[str, tuple[NumberEntityDescription, ...]] = {
             device_class=NumberDeviceClass.TEMPERATURE,
         ),
     ),
-    # Coffee maker
-    # https://developer.tuya.com/en/docs/iot/categorykfj?id=Kaiuz2p12pc7f
-    "kfj": (
+    DeviceCategory.KFJ: (
         NumberEntityDescription(
             key=DPCode.WATER_SET,
             translation_key="water_level",
@@ -171,9 +178,7 @@ NUMBERS: dict[str, tuple[NumberEntityDescription, ...]] = {
             entity_category=EntityCategory.CONFIG,
         ),
     ),
-    # Alarm Host
-    # https://developer.tuya.com/en/docs/iot/alarm-hosts?id=K9gf48r87hyjk
-    "mal": (
+    DeviceCategory.MAL: (
         NumberEntityDescription(
             key=DPCode.DELAY_SET,
             # This setting is called "Arm Delay" in the official Tuya app
@@ -195,9 +200,15 @@ NUMBERS: dict[str, tuple[NumberEntityDescription, ...]] = {
             entity_category=EntityCategory.CONFIG,
         ),
     ),
-    # Sous Vide Cooker
-    # https://developer.tuya.com/en/docs/iot/categorymzj?id=Kaiuz2vy130ux
-    "mzj": (
+    DeviceCategory.MSP: (
+        NumberEntityDescription(
+            key=DPCode.DELAY_CLEAN_TIME,
+            translation_key="delay_clean_time",
+            device_class=NumberDeviceClass.DURATION,
+            entity_category=EntityCategory.CONFIG,
+        ),
+    ),
+    DeviceCategory.MZJ: (
         NumberEntityDescription(
             key=DPCode.COOK_TEMPERATURE,
             translation_key="cook_temperature",
@@ -215,18 +226,35 @@ NUMBERS: dict[str, tuple[NumberEntityDescription, ...]] = {
             entity_category=EntityCategory.CONFIG,
         ),
     ),
-    # Robot Vacuum
-    # https://developer.tuya.com/en/docs/iot/fsd?id=K9gf487ck1tlo
-    "sd": (
+    DeviceCategory.SWTZ: (
+        NumberEntityDescription(
+            key=DPCode.COOK_TEMPERATURE,
+            translation_key="cook_temperature",
+            entity_category=EntityCategory.CONFIG,
+        ),
+        NumberEntityDescription(
+            key=DPCode.COOK_TEMPERATURE_2,
+            translation_key="indexed_cook_temperature",
+            translation_placeholders={"index": "2"},
+            entity_category=EntityCategory.CONFIG,
+        ),
+    ),
+    DeviceCategory.SD: (
         NumberEntityDescription(
             key=DPCode.VOLUME_SET,
             translation_key="volume",
             entity_category=EntityCategory.CONFIG,
         ),
     ),
-    # Smart Water Timer
-    "sfkzq": (
-        # Controls the irrigation duration for the water valve
+    DeviceCategory.SFKZQ: (
+        # Controls the irrigation duration for indexed water valves
+        NumberEntityDescription(
+            key=DPCode.COUNTDOWN,
+            translation_key="irrigation_duration",
+            device_class=NumberDeviceClass.DURATION,
+            entity_category=EntityCategory.CONFIG,
+        ),
+        # Controls the irrigation duration for indexed water valves
         NumberEntityDescription(
             key=DPCode.COUNTDOWN_1,
             translation_key="indexed_irrigation_duration",
@@ -284,36 +312,46 @@ NUMBERS: dict[str, tuple[NumberEntityDescription, ...]] = {
             entity_category=EntityCategory.CONFIG,
         ),
     ),
-    # Siren Alarm
-    # https://developer.tuya.com/en/docs/iot/categorysgbj?id=Kaiuz37tlpbnu
-    "sgbj": (
+    DeviceCategory.SGBJ: (
         NumberEntityDescription(
             key=DPCode.ALARM_TIME,
             translation_key="time",
             entity_category=EntityCategory.CONFIG,
         ),
     ),
-    # Smart Camera
-    # https://developer.tuya.com/en/docs/iot/categorysp?id=Kaiuz35leyo12
-    "sp": (
+    DeviceCategory.SP: (
         NumberEntityDescription(
             key=DPCode.BASIC_DEVICE_VOLUME,
             translation_key="volume",
             entity_category=EntityCategory.CONFIG,
         ),
+        NumberEntityDescription(
+            key=DPCode.IPC_BRIGHT,
+            translation_key="video_brightness",
+            entity_category=EntityCategory.CONFIG,
+        ),
+        NumberEntityDescription(
+            key=DPCode.IPC_CONTRAST,
+            translation_key="video_contrast",
+            entity_category=EntityCategory.CONFIG,
+        ),
+        NumberEntityDescription(
+            key=DPCode.IPC_SHARP,
+            translation_key="video_sharpness",
+            entity_category=EntityCategory.CONFIG,
+        ),
     ),
-    # Fingerbot
-    "szjqr": (
+    DeviceCategory.SZJQR: (
         NumberEntityDescription(
             key=DPCode.ARM_DOWN_PERCENT,
             translation_key="move_down",
-            native_unit_of_measurement=PERCENTAGE,
+            native_unit_of_measurement=UnitOfRatio.PERCENTAGE,
             entity_category=EntityCategory.CONFIG,
         ),
         NumberEntityDescription(
             key=DPCode.ARM_UP_PERCENT,
             translation_key="move_up",
-            native_unit_of_measurement=PERCENTAGE,
+            native_unit_of_measurement=UnitOfRatio.PERCENTAGE,
             entity_category=EntityCategory.CONFIG,
         ),
         NumberEntityDescription(
@@ -322,9 +360,7 @@ NUMBERS: dict[str, tuple[NumberEntityDescription, ...]] = {
             entity_category=EntityCategory.CONFIG,
         ),
     ),
-    # Dimmer Switch
-    # https://developer.tuya.com/en/docs/iot/categorytgkg?id=Kaiuz0ktx7m0o
-    "tgkg": (
+    DeviceCategory.TGKG: (
         NumberEntityDescription(
             key=DPCode.BRIGHTNESS_MIN_1,
             translation_key="indexed_minimum_brightness",
@@ -362,9 +398,7 @@ NUMBERS: dict[str, tuple[NumberEntityDescription, ...]] = {
             entity_category=EntityCategory.CONFIG,
         ),
     ),
-    # Dimmer Switch
-    # https://developer.tuya.com/en/docs/iot/categorytgkg?id=Kaiuz0ktx7m0o
-    "tgq": (
+    DeviceCategory.TGQ: (
         NumberEntityDescription(
             key=DPCode.BRIGHTNESS_MIN_1,
             translation_key="indexed_minimum_brightness",
@@ -390,18 +424,49 @@ NUMBERS: dict[str, tuple[NumberEntityDescription, ...]] = {
             entity_category=EntityCategory.CONFIG,
         ),
     ),
-    # Thermostat
-    # https://developer.tuya.com/en/docs/iot/f?id=K9gf45ld5l0t9
-    "wk": (
+    DeviceCategory.WG2: (
+        NumberEntityDescription(
+            key=DPCode.DELAY_SET,
+            # This setting is called "Arm Delay" in the official Tuya app
+            translation_key="arm_delay",
+            device_class=NumberDeviceClass.DURATION,
+            entity_category=EntityCategory.CONFIG,
+        ),
+        NumberEntityDescription(
+            key=DPCode.ALARM_DELAY_TIME,
+            translation_key="alarm_delay",
+            device_class=NumberDeviceClass.DURATION,
+            entity_category=EntityCategory.CONFIG,
+        ),
+        NumberEntityDescription(
+            key=DPCode.ALARM_TIME,
+            # This setting is called "Siren Duration" in the official Tuya app
+            translation_key="siren_duration",
+            device_class=NumberDeviceClass.DURATION,
+            entity_category=EntityCategory.CONFIG,
+        ),
+    ),
+    DeviceCategory.WK: (
         NumberEntityDescription(
             key=DPCode.TEMP_CORRECTION,
             translation_key="temp_correction",
             entity_category=EntityCategory.CONFIG,
         ),
     ),
-    # Tank Level Sensor
-    # Note: Undocumented
-    "ywcgq": (
+    DeviceCategory.XNYJCN: (
+        NumberEntityDescription(
+            key=DPCode.BACKUP_RESERVE,
+            translation_key="battery_backup_reserve",
+            entity_category=EntityCategory.CONFIG,
+        ),
+        NumberEntityDescription(
+            key=DPCode.OUTPUT_POWER_LIMIT,
+            translation_key="inverter_output_power_limit",
+            device_class=NumberDeviceClass.POWER,
+            entity_category=EntityCategory.CONFIG,
+        ),
+    ),
+    DeviceCategory.YWCGQ: (
         NumberEntityDescription(
             key=DPCode.MAX_SET,
             translation_key="alarm_maximum",
@@ -425,17 +490,14 @@ NUMBERS: dict[str, tuple[NumberEntityDescription, ...]] = {
             entity_category=EntityCategory.CONFIG,
         ),
     ),
-    # Vibration Sensor
-    # https://developer.tuya.com/en/docs/iot/categoryzd?id=Kaiuz3a5vrzno
-    "zd": (
+    DeviceCategory.ZD: (
         NumberEntityDescription(
             key=DPCode.SENSITIVITY,
             translation_key="sensitivity",
             entity_category=EntityCategory.CONFIG,
         ),
     ),
-    # Pool HeatPump
-    "znrb": (
+    DeviceCategory.ZNRB: (
         NumberEntityDescription(
             key=DPCode.TEMP_SET,
             translation_key="temperature",
@@ -445,8 +507,7 @@ NUMBERS: dict[str, tuple[NumberEntityDescription, ...]] = {
 }
 
 # Smart Camera - Low power consumption camera (duplicate of `sp`)
-# Undocumented, see https://github.com/home-assistant/core/issues/132844
-NUMBERS["dghsxj"] = NUMBERS["sp"]
+NUMBERS[DeviceCategory.DGHSXJ] = NUMBERS[DeviceCategory.SP]
 
 
 async def async_setup_entry(
@@ -455,24 +516,24 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up Tuya number dynamically through Tuya discovery."""
-    hass_data = entry.runtime_data
+    manager = entry.runtime_data.manager
 
     @callback
     def async_discover_device(device_ids: list[str]) -> None:
         """Discover and add a discovered Tuya number."""
         entities: list[TuyaNumberEntity] = []
         for device_id in device_ids:
-            device = hass_data.manager.device_map[device_id]
+            device = manager.device_map[device_id]
             if descriptions := NUMBERS.get(device.category):
                 entities.extend(
-                    TuyaNumberEntity(device, hass_data.manager, description)
+                    TuyaNumberEntity(device, manager, description, definition)
                     for description in descriptions
-                    if description.key in device.status
+                    if (definition := get_default_definition(device, description.key))
                 )
 
         async_add_entities(entities)
 
-    async_discover_device([*hass_data.manager.device_map])
+    async_discover_device([*manager.device_map])
 
     entry.async_on_unload(
         async_dispatcher_connect(hass, TUYA_DISCOVERY_NEW, async_discover_device)
@@ -482,91 +543,99 @@ async def async_setup_entry(
 class TuyaNumberEntity(TuyaEntity, NumberEntity):
     """Tuya Number Entity."""
 
-    _number: IntegerTypeData | None = None
-
     def __init__(
         self,
         device: CustomerDevice,
         device_manager: Manager,
         description: NumberEntityDescription,
+        definition: NumberDefinition,
     ) -> None:
-        """Init Tuya sensor."""
-        super().__init__(device, device_manager)
-        self.entity_description = description
-        self._attr_unique_id = f"{super().unique_id}{description.key}"
+        """Initialize a Tuya number entity."""
+        super().__init__(device, device_manager, description)
+        self._dpcode_wrapper = definition.number_wrapper
 
-        if int_type := self.find_dpcode(
-            description.key, dptype=DPType.INTEGER, prefer_function=True
-        ):
-            self._number = int_type
-            self._attr_native_max_value = self._number.max_scaled
-            self._attr_native_min_value = self._number.min_scaled
-            self._attr_native_step = self._number.step_scaled
-            if description.native_unit_of_measurement is None:
-                self._attr_native_unit_of_measurement = int_type.unit
+        self._attr_native_max_value = definition.number_wrapper.max_value
+        self._attr_native_min_value = definition.number_wrapper.min_value
+        self._attr_native_step = definition.number_wrapper.value_step
+
+        self._validate_device_class_unit(definition.number_wrapper.native_unit)
+
+    def _validate_device_class_unit(self, tuya_uom: str | None) -> None:
+        """Validate device class unit compatibility."""
 
         # Logic to ensure the set device class and API received Unit Of Measurement
         # match Home Assistants requirements.
         if (
-            self.device_class is not None
-            and not self.device_class.startswith(DOMAIN)
-            and description.native_unit_of_measurement is None
+            (device_class := self.device_class) is None
             # we do not need to check mappings if the API UOM is allowed
-            and self.native_unit_of_measurement
-            not in NUMBER_DEVICE_CLASS_UNITS[self.device_class]
+            or tuya_uom in NUMBER_DEVICE_CLASS_UNITS[device_class]
         ):
-            # We cannot have a device class, if the UOM isn't set or the
-            # device class cannot be found in the validation mapping.
-            if (
-                self.native_unit_of_measurement is None
-                or self.device_class not in DEVICE_CLASS_UNITS
-            ):
-                LOGGER.debug(
-                    "Device class %s ignored for incompatible unit %s in number entity %s",
-                    self.device_class,
-                    self.native_unit_of_measurement,
-                    self.unique_id,
-                )
-                self._attr_device_class = None
-                return
+            self._attr_native_unit_of_measurement = tuya_uom
+            return
 
-            uoms = DEVICE_CLASS_UNITS[self.device_class]
-            uom = uoms.get(self.native_unit_of_measurement) or uoms.get(
-                self.native_unit_of_measurement.lower()
+        # If the device provides TEMP_UNIT_CONVERT and no unit is set, use it.
+        if (
+            device_class is NumberDeviceClass.TEMPERATURE
+            and not tuya_uom
+            and (temp_unit := get_device_temp_unit_convert(self.device)) is not None
+        ):
+            self._attr_native_unit_of_measurement = temp_unit
+            return
+
+        # Check mappings for compatible units of measurement for the device class
+        if (
+            tuya_uom is not None
+            and (uoms := DEVICE_CLASS_UNITS.get(device_class))
+            and (uom := uoms.get(tuya_uom) or uoms.get(tuya_uom.lower()))
+        ):
+            self._attr_native_unit_of_measurement = uom.unit
+            return
+
+        if self.entity_description.native_unit_of_measurement is not None:
+            LOGGER.debug(
+                "Incompatible unit %s replaced by entity description unit %s "
+                "for device class %s in number entity %s; use a quirk "
+                "(https://github.com/home-assistant-libs/tuya-device-handlers)"
+                " to override",
+                tuya_uom,
+                self.entity_description.native_unit_of_measurement,
+                device_class,
+                self.unique_id,
             )
 
-            # Unknown unit of measurement, device class should not be used.
-            if uom is None:
-                self._attr_device_class = None
-                return
+            return
 
-            # Found unit of measurement, use the standardized Unit
-            # Use the target conversion unit (if set)
-            self._attr_native_unit_of_measurement = uom.unit
+        self._attr_native_unit_of_measurement = tuya_uom
+        self._attr_device_class = None
+        LOGGER.debug(
+            "Device class %s ignored for incompatible unit %s in number entity %s",
+            device_class,
+            tuya_uom,
+            self.unique_id,
+        )
 
     @property
+    @override
     def native_value(self) -> float | None:
         """Return the entity value to represent the entity state."""
-        # Unknown or unsupported data type
-        if self._number is None:
-            return None
+        return self._read_wrapper(self._dpcode_wrapper)
 
-        # Raw value
-        if (value := self.device.status.get(self.entity_description.key)) is None:
-            return None
+    @override
+    async def _process_device_update(
+        self,
+        updated_status_properties: list[str],
+        dp_timestamps: dict[str, int] | None,
+    ) -> bool:
+        """Called when Tuya device sends an update with updated properties.
 
-        return self._number.scale_value(value)
-
-    def set_native_value(self, value: float) -> None:
-        """Set new value."""
-        if self._number is None:
-            raise ActionDPCodeNotFoundError(self.device, self.entity_description.key)
-
-        self._send_command(
-            [
-                {
-                    "code": self.entity_description.key,
-                    "value": self._number.scale_value_back(value),
-                }
-            ]
+        Returns True if the Home Assistant state should be written,
+        or False if the state write should be skipped.
+        """
+        return not self._dpcode_wrapper.skip_update(
+            self.device, updated_status_properties, dp_timestamps
         )
+
+    @override
+    async def async_set_native_value(self, value: float) -> None:
+        """Set new value."""
+        await self._async_send_wrapper_updates(self._dpcode_wrapper, value)

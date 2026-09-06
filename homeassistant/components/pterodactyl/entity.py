@@ -1,5 +1,9 @@
 """Base entity for the Pterodactyl integration."""
 
+from typing import override
+
+from yarl import URL
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_URL
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -33,10 +37,13 @@ class PterodactylEntity(CoordinatorEntity[PterodactylCoordinator]):
             name=self.game_server_data.name,
             model=self.game_server_data.name,
             model_id=self.game_server_data.uuid,
-            configuration_url=f"{config_entry.data[CONF_URL]}/server/{identifier}",
+            configuration_url=str(
+                URL(config_entry.data[CONF_URL]) / "server" / identifier
+            ),
         )
 
     @property
+    @override
     def available(self) -> bool:
         """Return binary sensor availability."""
         return super().available and self.identifier in self.coordinator.data

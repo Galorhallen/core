@@ -1,9 +1,10 @@
 """The Homee alarm control panel platform."""
 
 from dataclasses import dataclass
+from typing import override
 
 from pyHomee.const import AttributeChangedBy, AttributeType
-from pyHomee.model import HomeeAttribute
+from pyHomee.model import HomeeAttribute, HomeeNode
 
 from homeassistant.components.alarm_control_panel import (
     AlarmControlPanelEntity,
@@ -17,7 +18,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import DOMAIN, HomeeConfigEntry
 from .entity import HomeeEntity
-from .helpers import get_name_for_enum
+from .helpers import get_name_for_enum, setup_homee_platform
 
 PARALLEL_UPDATES = 0
 
@@ -33,7 +34,6 @@ class HomeeAlarmControlPanelEntityDescription(AlarmControlPanelEntityDescription
 ALARM_DESCRIPTIONS = {
     AttributeType.HOMEE_MODE: HomeeAlarmControlPanelEntityDescription(
         key="homee_mode",
-        code_arm_required=False,
         state_list=[
             AlarmControlPanelState.ARMED_HOME,
             AlarmControlPanelState.ARMED_NIGHT,
@@ -60,18 +60,32 @@ def get_supported_features(
     return supported_features
 
 
+async def add_alarm_control_panel_entities(
+    hass: HomeAssistant,
+    config_entry: HomeeConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+    nodes: list[HomeeNode],
+) -> None:
+    """Add homee alarm control panel entities."""
+    async_add_entities(
+        HomeeAlarmPanel(
+            hass, attribute, config_entry, ALARM_DESCRIPTIONS[attribute.type]
+        )
+        for node in nodes
+        for attribute in node.attributes
+        if attribute.type in ALARM_DESCRIPTIONS and attribute.editable
+    )
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: HomeeConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Add the Homee platform for the alarm control panel component."""
+    """Add the homee platform for the alarm control panel component."""
 
-    async_add_entities(
-        HomeeAlarmPanel(attribute, config_entry, ALARM_DESCRIPTIONS[attribute.type])
-        for node in config_entry.runtime_data.nodes
-        for attribute in node.attributes
-        if attribute.type in ALARM_DESCRIPTIONS and attribute.editable
+    await setup_homee_platform(
+        hass, add_alarm_control_panel_entities, async_add_entities, config_entry
     )
 
 
@@ -82,23 +96,26 @@ class HomeeAlarmPanel(HomeeEntity, AlarmControlPanelEntity):
 
     def __init__(
         self,
+        hass: HomeAssistant,
         attribute: HomeeAttribute,
         entry: HomeeConfigEntry,
         description: HomeeAlarmControlPanelEntityDescription,
     ) -> None:
         """Initialize a Homee alarm control panel entity."""
-        super().__init__(attribute, entry)
+        super().__init__(hass, attribute, entry)
         self.entity_description = description
         self._attr_code_arm_required = description.code_arm_required
         self._attr_supported_features = get_supported_features(description.state_list)
         self._attr_translation_key = description.key
 
     @property
+    @override
     def alarm_state(self) -> AlarmControlPanelState:
         """Return current state."""
         return self.entity_description.state_list[int(self._attribute.current_value)]
 
     @property
+    @override
     def changed_by(self) -> str:
         """Return by whom or what the entity was last changed."""
         changed_by_name = get_name_for_enum(
@@ -113,6 +130,7 @@ class HomeeAlarmPanel(HomeeEntity, AlarmControlPanelEntity):
                 self.entity_description.state_list.index(state)
             )
 
+    @override
     async def async_alarm_disarm(self, code: str | None = None) -> None:
         """Send disarm command."""
         # Since disarm is always present in the UI, we raise an error.
@@ -121,18 +139,22 @@ class HomeeAlarmPanel(HomeeEntity, AlarmControlPanelEntity):
             translation_key="disarm_not_supported",
         )
 
+    @override
     async def async_alarm_arm_home(self, code: str | None = None) -> None:
         """Send arm home command."""
         await self._async_set_alarm_state(AlarmControlPanelState.ARMED_HOME)
 
+    @override
     async def async_alarm_arm_night(self, code: str | None = None) -> None:
         """Send arm night command."""
         await self._async_set_alarm_state(AlarmControlPanelState.ARMED_NIGHT)
 
+    @override
     async def async_alarm_arm_away(self, code: str | None = None) -> None:
         """Send arm away command."""
         await self._async_set_alarm_state(AlarmControlPanelState.ARMED_AWAY)
 
+    @override
     async def async_alarm_arm_vacation(self, code: str | None = None) -> None:
         """Send arm vacation command."""
         await self._async_set_alarm_state(AlarmControlPanelState.ARMED_VACATION)

@@ -1,26 +1,32 @@
 """Tests for miele sensor module."""
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 from freezegun.api import FrozenDateTimeFactory
-from pymiele import MieleDevices
+from pymiele import MieleDevices, MieleTemperature
 import pytest
 from syrupy.assertion import SnapshotAssertion
 
 from homeassistant.components.miele.const import DOMAIN
+from homeassistant.components.miele.sensor import _convert_temperature
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
-from homeassistant.core import HomeAssistant
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers import entity_registry as er
+
+from . import get_data_callback
 
 from tests.common import (
     MockConfigEntry,
     async_fire_time_changed,
     async_load_json_object_fixture,
+    mock_restore_cache_with_extra_data,
     snapshot_platform,
 )
 
 
+@pytest.mark.freeze_time("2025-05-31 12:30:00+00:00")
 @pytest.mark.parametrize("platforms", [(SENSOR_DOMAIN,)])
 @pytest.mark.usefixtures("entity_registry_enabled_by_default")
 async def test_sensor_states(
@@ -35,6 +41,7 @@ async def test_sensor_states(
     await snapshot_platform(hass, entity_registry, snapshot, setup_platform.entry_id)
 
 
+@pytest.mark.freeze_time("2025-05-31 12:30:00+00:00")
 @pytest.mark.parametrize("platforms", [(SENSOR_DOMAIN,)])
 @pytest.mark.usefixtures("entity_registry_enabled_by_default")
 async def test_sensor_states_api_push(
@@ -47,6 +54,29 @@ async def test_sensor_states_api_push(
 ) -> None:
     """Test sensor state when the API pushes data via SSE."""
 
+    await snapshot_platform(hass, entity_registry, snapshot, setup_platform.entry_id)
+
+
+@pytest.mark.freeze_time("2025-05-31 12:30:00+00:00")
+@pytest.mark.parametrize("platforms", [(SENSOR_DOMAIN,)])
+@pytest.mark.usefixtures("entity_registry_enabled_by_default")
+async def test_sensor_states_api_push_one_device(
+    hass: HomeAssistant,
+    mock_miele_client: MagicMock,
+    snapshot: SnapshotAssertion,
+    entity_registry: er.EntityRegistry,
+    setup_platform: MockConfigEntry,
+    push_data_and_actions: None,
+) -> None:
+    """Test sensor state when the API pushes data for one device only via SSE."""
+
+    dev_file = await async_load_json_object_fixture(hass, "1_device.json", DOMAIN)
+    data_callback = get_data_callback(mock_miele_client)
+    await data_callback(dev_file)
+    await hass.async_block_till_done()
+
+    assert hass.states.get("sensor.refrigerator_temperature").state != "unavailable"
+    assert hass.states.get("sensor.freezer_temperature").state == "-19.0"
     await snapshot_platform(hass, entity_registry, snapshot, setup_platform.entry_id)
 
 
@@ -92,7 +122,8 @@ async def test_oven_temperatures_scenario(
 ) -> None:
     """Parametrized test for verifying temperature sensors for oven devices."""
 
-    # Initial state when the oven is and created for the first time - don't know if it supports core temperature (probe)
+    # Initial state when oven is created for the first time
+    # — no core probe entities yet
     check_sensor_state(hass, "sensor.oven_temperature", "unknown", 0)
     check_sensor_state(hass, "sensor.oven_target_temperature", "unknown", 0)
     check_sensor_state(hass, "sensor.oven_core_temperature", None, 0)
@@ -204,6 +235,95 @@ def check_sensor_state(
 
 @pytest.mark.parametrize("load_device_file", ["oven.json"])
 @pytest.mark.parametrize("platforms", [(SENSOR_DOMAIN,)])
+async def test_oven_core_probe_sensors_unknown_when_inactive(
+    hass: HomeAssistant,
+    mock_miele_client: MagicMock,
+    setup_platform: None,
+    device_fixture: MieleDevices,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """Oven food-probe sensors must not expose API inactive sentinels.
+
+    Miele uses raw value -32768 (centidegrees) when the probe is not in use. After the
+    probe has reported a valid reading once, those entities must stay in the UI but
+    their state must be unknown—not a bogus numeric temperature.
+    """
+    core_temp = "sensor.oven_core_temperature"
+    core_target = "sensor.oven_core_target_temperature"
+
+    assert hass.states.get(core_temp) is None
+    assert hass.states.get(core_target) is None
+
+    device_fixture["DummyOven"]["state"]["coreTargetTemperature"][0]["value_raw"] = 3000
+    device_fixture["DummyOven"]["state"]["coreTargetTemperature"][0][
+        "value_localized"
+    ] = 30.0
+    device_fixture["DummyOven"]["state"]["coreTemperature"][0]["value_raw"] = 2200
+    device_fixture["DummyOven"]["state"]["coreTemperature"][0]["value_localized"] = 22.0
+
+    freezer.tick(timedelta(seconds=130))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
+    assert hass.states.get(core_temp) is not None
+    assert hass.states.get(core_temp).state == "22.0"
+    assert hass.states.get(core_target) is not None
+    assert hass.states.get(core_target).state == "30.0"
+
+    device_fixture["DummyOven"]["state"]["coreTargetTemperature"][0][
+        "value_raw"
+    ] = -32768
+    device_fixture["DummyOven"]["state"]["coreTargetTemperature"][0][
+        "value_localized"
+    ] = None
+    device_fixture["DummyOven"]["state"]["coreTemperature"][0]["value_raw"] = -32768
+    device_fixture["DummyOven"]["state"]["coreTemperature"][0]["value_localized"] = None
+
+    freezer.tick(timedelta(seconds=130))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
+    assert hass.states.get(core_temp).state == STATE_UNKNOWN
+    assert hass.states.get(core_target).state == STATE_UNKNOWN
+
+
+@pytest.mark.parametrize("load_device_file", ["oven.json"])
+@pytest.mark.parametrize("platforms", [(SENSOR_DOMAIN,)])
+async def test_oven_core_probe_unknown_when_inactive_raw_scaled(
+    hass: HomeAssistant,
+    mock_miele_client: MagicMock,
+    setup_platform: None,
+    device_fixture: MieleDevices,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """Some ovens report int16-min differently; both must be unknown.
+
+    Both must map to unknown, not a numeric sensor state.
+    """
+    core_temp = "sensor.oven_core_temperature"
+
+    device_fixture["DummyOven"]["state"]["coreTemperature"][0]["value_raw"] = 2200
+    device_fixture["DummyOven"]["state"]["coreTemperature"][0]["value_localized"] = 22.0
+
+    freezer.tick(timedelta(seconds=130))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
+    assert hass.states.get(core_temp) is not None
+    assert hass.states.get(core_temp).state == "22.0"
+
+    device_fixture["DummyOven"]["state"]["coreTemperature"][0]["value_raw"] = -3276800
+    device_fixture["DummyOven"]["state"]["coreTemperature"][0]["value_localized"] = None
+
+    freezer.tick(timedelta(seconds=130))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
+    assert hass.states.get(core_temp).state == STATE_UNKNOWN
+
+
+@pytest.mark.parametrize("load_device_file", ["oven.json"])
+@pytest.mark.parametrize("platforms", [(SENSOR_DOMAIN,)])
 async def test_temperature_sensor_registry_lookup(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
@@ -212,7 +332,7 @@ async def test_temperature_sensor_registry_lookup(
     device_fixture: MieleDevices,
     freezer: FrozenDateTimeFactory,
 ) -> None:
-    """Test that core temperature sensor is provided by the integration after looking up in entity registry."""
+    """Test core temperature sensor provided after entity registry lookup."""
 
     # Initial state, the oven is showing core temperature (probe)
     freezer.tick(timedelta(seconds=130))
@@ -297,9 +417,10 @@ async def test_laundry_wash_scenario(
     device_fixture: MieleDevices,
     freezer: FrozenDateTimeFactory,
 ) -> None:
-    """Parametrized test for verifying time sensors for wahsing machine devices when API glitches at program end."""
+    """Test time sensors for washing machine when API glitches at end."""
 
     step = 0
+    freezer.move_to("2025-05-31T12:00:00+00:00")
 
     # Initial state when the washing machine is off
     check_sensor_state(hass, "sensor.washing_machine", "off", step)
@@ -311,9 +432,20 @@ async def test_laundry_wash_scenario(
         hass, "sensor.washing_machine_target_temperature", "unknown", step
     )
     check_sensor_state(hass, "sensor.washing_machine_spin_speed", "unknown", step)
-    check_sensor_state(hass, "sensor.washing_machine_remaining_time", "0", step)
-    # OFF -> elapsed forced to unknown (some devices continue reporting last value of last cycle)
+    # OFF -> remaining forced to unknown
+    check_sensor_state(hass, "sensor.washing_machine_remaining_time", "unknown", step)
+    # OFF -> elapsed forced to unknown (some devices continue
+    # reporting last value of last cycle)
     check_sensor_state(hass, "sensor.washing_machine_elapsed_time", "unknown", step)
+    check_sensor_state(hass, "sensor.washing_machine_start", "unknown", step)
+    check_sensor_state(hass, "sensor.washing_machine_finish", "unknown", step)
+    # consumption sensors have to report "unknown" when the device is not working
+    check_sensor_state(
+        hass, "sensor.washing_machine_energy_consumption", "unknown", step
+    )
+    check_sensor_state(
+        hass, "sensor.washing_machine_water_consumption", "unknown", step
+    )
 
     # Simulate program started
     device_fixture["DummyWasher"]["state"]["status"]["value_raw"] = 5
@@ -336,10 +468,46 @@ async def test_laundry_wash_scenario(
     device_fixture["DummyWasher"]["state"]["elapsedTime"][1] = 12
     device_fixture["DummyWasher"]["state"]["spinningSpeed"]["value_raw"] = 1200
     device_fixture["DummyWasher"]["state"]["spinningSpeed"]["value_localized"] = "1200"
+    device_fixture["DummyWasher"]["state"]["ecoFeedback"] = {
+        "currentEnergyConsumption": {
+            "value": 0.9,
+            "unit": "kWh",
+        },
+        "currentWaterConsumption": {
+            "value": 52,
+            "unit": "l",
+        },
+    }
 
-    freezer.tick(timedelta(seconds=130))
+    freezer.move_to("2025-05-31T12:30:00+00:00")
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
+
+    # at this point, appliance is working, but it started reporting a
+    # value from last cycle, so it is forced to 0
+    check_sensor_state(hass, "sensor.washing_machine_energy_consumption", "0", step)
+    check_sensor_state(hass, "sensor.washing_machine_water_consumption", "0", step)
+
+    # intermediate step, only to report new consumption values
+    device_fixture["DummyWasher"]["state"]["ecoFeedback"] = {
+        "currentEnergyConsumption": {
+            "value": 0.0,
+            "unit": "kWh",
+        },
+        "currentWaterConsumption": {
+            "value": 0,
+            "unit": "l",
+        },
+    }
+    device_fixture["DummyWasher"]["state"]["elapsedTime"][0] = 0
+    device_fixture["DummyWasher"]["state"]["elapsedTime"][1] = 14
+    device_fixture["DummyWasher"]["state"]["remainingTime"][0] = 1
+    device_fixture["DummyWasher"]["state"]["remainingTime"][1] = 43
+
+    freezer.move_to("2025-05-31T12:32:00+00:00")
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
     step += 1
 
     check_sensor_state(hass, "sensor.washing_machine", "in_use", step)
@@ -347,9 +515,37 @@ async def test_laundry_wash_scenario(
     check_sensor_state(hass, "sensor.washing_machine_program_phase", "main_wash", step)
     check_sensor_state(hass, "sensor.washing_machine_target_temperature", "30.0", step)
     check_sensor_state(hass, "sensor.washing_machine_spin_speed", "1200", step)
-    check_sensor_state(hass, "sensor.washing_machine_remaining_time", "105", step)
-    # IN_USE -> elapsed time from API (normal case)
-    check_sensor_state(hass, "sensor.washing_machine_elapsed_time", "12", step)
+    # IN_USE -> elapsed, remaining time from API (normal case)
+    check_sensor_state(hass, "sensor.washing_machine_remaining_time", "103", step)
+    check_sensor_state(hass, "sensor.washing_machine_elapsed_time", "14", step)
+    check_sensor_state(
+        hass, "sensor.washing_machine_start", "2025-05-31T12:18:00+00:00", step
+    )
+    check_sensor_state(
+        hass, "sensor.washing_machine_finish", "2025-05-31T14:15:00+00:00", step
+    )
+    check_sensor_state(hass, "sensor.washing_machine_energy_consumption", "0.0", step)
+    check_sensor_state(hass, "sensor.washing_machine_water_consumption", "0", step)
+
+    # intermediate step, only to report new consumption values
+    device_fixture["DummyWasher"]["state"]["ecoFeedback"] = {
+        "currentEnergyConsumption": {
+            "value": 0.1,
+            "unit": "kWh",
+        },
+        "currentWaterConsumption": {
+            "value": 7,
+            "unit": "l",
+        },
+    }
+
+    freezer.move_to("2025-05-31T12:34:00+00:00")
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
+    # at this point, it starts reporting value from API
+    check_sensor_state(hass, "sensor.washing_machine_energy_consumption", "0.1", step)
+    check_sensor_state(hass, "sensor.washing_machine_water_consumption", "7", step)
 
     # Simulate rinse hold phase
     device_fixture["DummyWasher"]["state"]["status"]["value_raw"] = 11
@@ -363,7 +559,7 @@ async def test_laundry_wash_scenario(
     device_fixture["DummyWasher"]["state"]["elapsedTime"][0] = 1
     device_fixture["DummyWasher"]["state"]["elapsedTime"][1] = 49
 
-    freezer.tick(timedelta(seconds=130))
+    freezer.move_to("2025-05-31T14:07:00+00:00")
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
     step += 1
@@ -373,9 +569,15 @@ async def test_laundry_wash_scenario(
     check_sensor_state(hass, "sensor.washing_machine_program_phase", "rinse_hold", step)
     check_sensor_state(hass, "sensor.washing_machine_target_temperature", "30.0", step)
     check_sensor_state(hass, "sensor.washing_machine_spin_speed", "1200", step)
+    # RINSE HOLD -> elapsed, remaining time from API (normal case)
     check_sensor_state(hass, "sensor.washing_machine_remaining_time", "8", step)
-    # RINSE HOLD -> elapsed time from API (normal case)
     check_sensor_state(hass, "sensor.washing_machine_elapsed_time", "109", step)
+    check_sensor_state(
+        hass, "sensor.washing_machine_start", "2025-05-31T12:18:00+00:00", step
+    )
+    check_sensor_state(
+        hass, "sensor.washing_machine_finish", "2025-05-31T14:15:00+00:00", step
+    )
 
     # Simulate program ended
     device_fixture["DummyWasher"]["state"]["status"]["value_raw"] = 7
@@ -388,8 +590,9 @@ async def test_laundry_wash_scenario(
     device_fixture["DummyWasher"]["state"]["remainingTime"][1] = 0
     device_fixture["DummyWasher"]["state"]["elapsedTime"][0] = 0
     device_fixture["DummyWasher"]["state"]["elapsedTime"][1] = 0
+    device_fixture["DummyWasher"]["state"]["ecoFeedback"] = None
 
-    freezer.tick(timedelta(seconds=130))
+    freezer.move_to("2025-05-31T14:30:00+00:00")
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
     step += 1
@@ -401,9 +604,21 @@ async def test_laundry_wash_scenario(
     )
     check_sensor_state(hass, "sensor.washing_machine_target_temperature", "30.0", step)
     check_sensor_state(hass, "sensor.washing_machine_spin_speed", "1200", step)
+    # PROGRAM_ENDED -> remaining time forced to 0
     check_sensor_state(hass, "sensor.washing_machine_remaining_time", "0", step)
-    # PROGRAM_ENDED -> elapsed time kept from last program (some devices immediately go to 0)
+    # PROGRAM_ENDED -> elapsed time kept from last program
+    # (some devices immediately go to 0)
     check_sensor_state(hass, "sensor.washing_machine_elapsed_time", "109", step)
+    check_sensor_state(
+        hass, "sensor.washing_machine_start", "2025-05-31T12:18:00+00:00", step
+    )
+    check_sensor_state(
+        hass, "sensor.washing_machine_finish", "2025-05-31T14:15:00+00:00", step
+    )
+    # consumption values now report last known value,
+    # API might start reporting null object
+    check_sensor_state(hass, "sensor.washing_machine_energy_consumption", "0.1", step)
+    check_sensor_state(hass, "sensor.washing_machine_water_consumption", "7", step)
 
     # Simulate when door is opened after program ended
     device_fixture["DummyWasher"]["state"]["status"]["value_raw"] = 3
@@ -421,7 +636,7 @@ async def test_laundry_wash_scenario(
     device_fixture["DummyWasher"]["state"]["elapsedTime"][0] = 0
     device_fixture["DummyWasher"]["state"]["elapsedTime"][1] = 0
 
-    freezer.tick(timedelta(seconds=130))
+    freezer.move_to("2025-05-31T14:32:00+00:00")
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
     step += 1
@@ -433,9 +648,13 @@ async def test_laundry_wash_scenario(
     )
     check_sensor_state(hass, "sensor.washing_machine_target_temperature", "40.0", step)
     check_sensor_state(hass, "sensor.washing_machine_spin_speed", "1200", step)
+    # PROGRAMMED -> elapsed, remaining time from API (normal case)
     check_sensor_state(hass, "sensor.washing_machine_remaining_time", "119", step)
-    # PROGRAMMED -> elapsed time from API (normal case)
     check_sensor_state(hass, "sensor.washing_machine_elapsed_time", "0", step)
+    check_sensor_state(hass, "sensor.washing_machine_start", "unknown", step)
+    check_sensor_state(
+        hass, "sensor.washing_machine_finish", "2025-05-31T16:31:00+00:00", step
+    )
 
 
 @pytest.mark.parametrize("load_device_file", ["laundry.json"])
@@ -448,18 +667,22 @@ async def test_laundry_dry_scenario(
     device_fixture: MieleDevices,
     freezer: FrozenDateTimeFactory,
 ) -> None:
-    """Parametrized test for verifying time sensors for tumble dryer devices when API reports time value from last cycle, when device is off."""
+    """Test time sensors for tumble dryer when API reports stale time."""
 
     step = 0
+    freezer.move_to("2025-05-31T12:00:00+00:00")
 
     # Initial state when the washing machine is off
     check_sensor_state(hass, "sensor.tumble_dryer", "off", step)
     check_sensor_state(hass, "sensor.tumble_dryer_program", "no_program", step)
     check_sensor_state(hass, "sensor.tumble_dryer_program_phase", "not_running", step)
     check_sensor_state(hass, "sensor.tumble_dryer_drying_step", "unknown", step)
-    check_sensor_state(hass, "sensor.tumble_dryer_remaining_time", "0", step)
-    # OFF -> elapsed forced to unknown (some devices continue reporting last value of last cycle)
+    # OFF -> elapsed, remaining forced to unknown (some devices
+    # continue reporting last value of last cycle)
+    check_sensor_state(hass, "sensor.tumble_dryer_remaining_time", "unknown", step)
     check_sensor_state(hass, "sensor.tumble_dryer_elapsed_time", "unknown", step)
+    check_sensor_state(hass, "sensor.tumble_dryer_start", "unknown", step)
+    check_sensor_state(hass, "sensor.tumble_dryer_finish", "unknown", step)
 
     # Simulate program started
     device_fixture["DummyDryer"]["state"]["status"]["value_raw"] = 5
@@ -477,7 +700,7 @@ async def test_laundry_dry_scenario(
     device_fixture["DummyDryer"]["state"]["dryingStep"]["value_raw"] = 2
     device_fixture["DummyDryer"]["state"]["dryingStep"]["value_localized"] = "Normal"
 
-    freezer.tick(timedelta(seconds=130))
+    freezer.move_to("2025-05-31T12:30:00+00:00")
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
     step += 1
@@ -486,9 +709,15 @@ async def test_laundry_dry_scenario(
     check_sensor_state(hass, "sensor.tumble_dryer_program", "minimum_iron", step)
     check_sensor_state(hass, "sensor.tumble_dryer_program_phase", "drying", step)
     check_sensor_state(hass, "sensor.tumble_dryer_drying_step", "normal", step)
+    # IN_USE -> elapsed, remaining time from API (normal case)
     check_sensor_state(hass, "sensor.tumble_dryer_remaining_time", "49", step)
-    # IN_USE -> elapsed time from API (normal case)
     check_sensor_state(hass, "sensor.tumble_dryer_elapsed_time", "20", step)
+    check_sensor_state(
+        hass, "sensor.tumble_dryer_start", "2025-05-31T12:10:00+00:00", step
+    )
+    check_sensor_state(
+        hass, "sensor.tumble_dryer_finish", "2025-05-31T13:19:00+00:00", step
+    )
 
     # Simulate program end
     device_fixture["DummyDryer"]["state"]["status"]["value_raw"] = 7
@@ -502,7 +731,7 @@ async def test_laundry_dry_scenario(
     device_fixture["DummyDryer"]["state"]["elapsedTime"][0] = 1
     device_fixture["DummyDryer"]["state"]["elapsedTime"][1] = 18
 
-    freezer.tick(timedelta(seconds=130))
+    freezer.move_to("2025-05-31T14:30:00+00:00")
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
     step += 1
@@ -511,11 +740,23 @@ async def test_laundry_dry_scenario(
     check_sensor_state(hass, "sensor.tumble_dryer_program", "minimum_iron", step)
     check_sensor_state(hass, "sensor.tumble_dryer_program_phase", "finished", step)
     check_sensor_state(hass, "sensor.tumble_dryer_drying_step", "normal", step)
+    # PROGRAM_ENDED -> remaining time forced to 0
     check_sensor_state(hass, "sensor.tumble_dryer_remaining_time", "0", step)
-    # PROGRAM_ENDED -> elapsed time kept from last program (some devices immediately go to 0)
+    # PROGRAM_ENDED -> elapsed time kept from last program
+    # (some devices immediately go to 0)
     check_sensor_state(hass, "sensor.tumble_dryer_elapsed_time", "20", step)
+    check_sensor_state(
+        hass, "sensor.tumble_dryer_start", "2025-05-31T12:10:00+00:00", step
+    )
+    check_sensor_state(
+        hass, "sensor.tumble_dryer_finish", "2025-05-31T13:19:00+00:00", step
+    )
 
 
+@pytest.mark.parametrize("restore_state", ["45", STATE_UNKNOWN, STATE_UNAVAILABLE])
+@pytest.mark.parametrize(
+    "restore_state_abs", ["2025-05-31T13:19:00+00:00", STATE_UNKNOWN, STATE_UNAVAILABLE]
+)
 @pytest.mark.parametrize("load_device_file", ["laundry.json"])
 @pytest.mark.parametrize("platforms", [(SENSOR_DOMAIN,)])
 async def test_elapsed_time_sensor_restored(
@@ -525,10 +766,13 @@ async def test_elapsed_time_sensor_restored(
     setup_platform: None,
     device_fixture: MieleDevices,
     freezer: FrozenDateTimeFactory,
+    restore_state,
+    restore_state_abs,
 ) -> None:
     """Test that elapsed time returns the restored value when program ended."""
 
     entity_id = "sensor.washing_machine_elapsed_time"
+    entity_id_abs = "sensor.washing_machine_finish"
 
     # Simulate program started
     device_fixture["DummyWasher"]["state"]["status"]["value_raw"] = 5
@@ -552,11 +796,12 @@ async def test_elapsed_time_sensor_restored(
     device_fixture["DummyWasher"]["state"]["spinningSpeed"]["value_raw"] = 1200
     device_fixture["DummyWasher"]["state"]["spinningSpeed"]["value_localized"] = "1200"
 
-    freezer.tick(timedelta(seconds=130))
+    freezer.move_to(datetime(2025, 5, 31, 12, 30, tzinfo=UTC))
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
 
     assert hass.states.get(entity_id).state == "12"
+    assert hass.states.get(entity_id_abs).state == "2025-05-31T14:15:00+00:00"
 
     # Simulate program ended
     device_fixture["DummyWasher"]["state"]["status"]["value_raw"] = 7
@@ -570,7 +815,7 @@ async def test_elapsed_time_sensor_restored(
     device_fixture["DummyWasher"]["state"]["elapsedTime"][0] = 0
     device_fixture["DummyWasher"]["state"]["elapsedTime"][1] = 0
 
-    freezer.tick(timedelta(seconds=130))
+    freezer.move_to(datetime(2025, 5, 31, 14, 20, tzinfo=UTC))
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
 
@@ -580,7 +825,38 @@ async def test_elapsed_time_sensor_restored(
     await hass.async_block_till_done()
 
     assert hass.states.get(entity_id).state == "unavailable"
+    assert hass.states.get(entity_id_abs).state == "unavailable"
 
+    # simulate restore with state different from native value
+    mock_restore_cache_with_extra_data(
+        hass,
+        [
+            (
+                State(
+                    entity_id,
+                    restore_state,
+                    {
+                        "unit_of_measurement": "min",
+                    },
+                ),
+                {
+                    "native_value": "12",
+                    "native_unit_of_measurement": "min",
+                },
+            ),
+            (
+                State(
+                    entity_id_abs,
+                    restore_state_abs,
+                    {"device_class": "timestamp"},
+                ),
+                {
+                    "native_value": datetime(2025, 5, 31, 14, 15, tzinfo=UTC),
+                    "native_unit_of_measurement": None,
+                },
+            ),
+        ],
+    )
     await hass.config_entries.async_reload(mock_config_entry.entry_id)
     await hass.async_block_till_done()
 
@@ -588,3 +864,41 @@ async def test_elapsed_time_sensor_restored(
     state = hass.states.get(entity_id)
     assert state is not None
     assert state.state == "12"
+
+    # check that absolute time is the one restored and not the value reported by API
+    state = hass.states.get(entity_id_abs)
+    assert state is not None
+    assert state.state == "2025-05-31T14:15:00+00:00"
+
+
+def _core_temperature_entry(value_raw: object | None) -> MieleTemperature:
+    """Build a MieleTemperature like the API returns for core/zone readings."""
+    return MieleTemperature({"value_raw": value_raw})
+
+
+@pytest.mark.parametrize(
+    ("entries", "index", "expected"),
+    [
+        ([], 0, None),
+        ([_core_temperature_entry(2200)], 1, None),
+        ([_core_temperature_entry(None)], 0, None),
+        ([_core_temperature_entry(-32768)], 0, None),
+        ([_core_temperature_entry(-32766)], 0, None),
+        ([_core_temperature_entry(-3276800)], 0, None),
+        ([_core_temperature_entry(-3276600)], 0, None),
+        ([_core_temperature_entry(2150)], 0, 21.5),
+    ],
+)
+def test_convert_temperature(
+    entries: list[MieleTemperature],
+    index: int,
+    expected: float | None,
+) -> None:
+    """Cover _convert_temperature branches."""
+    assert _convert_temperature(entries, index) == expected
+
+
+def test_convert_temperature_invalid_raw_types() -> None:
+    """int() must not raise: bad API payloads become unknown."""
+    assert _convert_temperature([_core_temperature_entry("n/a")], 0) is None
+    assert _convert_temperature([_core_temperature_entry([1])], 0) is None

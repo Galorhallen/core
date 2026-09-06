@@ -1,6 +1,6 @@
 """Base class for iRobot devices."""
 
-from __future__ import annotations
+from typing import override
 
 from homeassistant.const import ATTR_CONNECTIONS
 from homeassistant.helpers import device_registry as dr
@@ -31,7 +31,11 @@ class IRobotEntity(Entity):
             model=self.vacuum_state.get("sku"),
             name=str(self.vacuum_state.get("name")),
             sw_version=self.vacuum_state.get("softwareVer"),
-            hw_version=self.vacuum_state.get("hardwareRev"),
+            hw_version=(
+                str(hw_rev)
+                if (hw_rev := self.vacuum_state.get("hardwareRev")) is not None
+                else None
+            ),
         )
 
         if mac_address := self.vacuum_state.get("hwPartsRev", {}).get(
@@ -47,6 +51,7 @@ class IRobotEntity(Entity):
         return f"roomba_{self._blid}"
 
     @property
+    @override
     def unique_id(self):
         """Return the uniqueid of the vacuum cleaner."""
         return self.robot_unique_id
@@ -67,6 +72,16 @@ class IRobotEntity(Entity):
         return self.vacuum_state.get("bbchg3", {})
 
     @property
+    def tank_level(self) -> int | None:
+        """Return the tank level."""
+        return self.vacuum_state.get("tankLvl")
+
+    @property
+    def dock_tank_level(self) -> int | None:
+        """Return the dock tank level."""
+        return self.vacuum_state.get("dock", {}).get("tankLvl")
+
+    @property
     def last_mission(self):
         """Return last mission start time."""
         if (
@@ -75,6 +90,7 @@ class IRobotEntity(Entity):
             return None
         return dt_util.utc_from_timestamp(ts)
 
+    @override
     async def async_added_to_hass(self) -> None:
         """Register callback function."""
         self.vacuum.register_on_message_callback(self.on_message)

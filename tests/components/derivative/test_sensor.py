@@ -4,17 +4,29 @@ from datetime import timedelta
 from math import sin
 import random
 from typing import Any
+from unittest.mock import patch
 
 from freezegun import freeze_time
 import pytest
 
+from homeassistant import config as hass_config, core as ha
 from homeassistant.components.derivative.const import DOMAIN
-from homeassistant.components.sensor import ATTR_STATE_CLASS, SensorStateClass
+from homeassistant.components.sensor import (
+    ATTR_STATE_CLASS,
+    SensorDeviceClass,
+    SensorStateClass,
+)
 from homeassistant.const import (
+    ATTR_DEVICE_CLASS,
+    SERVICE_RELOAD,
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
+    UnitOfDataRate,
+    UnitOfEnergy,
     UnitOfPower,
+    UnitOfSpeed,
     UnitOfTime,
+    UnitOfVolumeFlowRate,
 )
 from homeassistant.core import (
     Event,
@@ -31,6 +43,7 @@ from homeassistant.util import dt as dt_util
 from tests.common import (
     MockConfigEntry,
     async_fire_time_changed,
+    get_fixture_path,
     mock_restore_cache_with_extra_data,
 )
 
@@ -200,6 +213,7 @@ async def setup_tests(
     assert state is not None
 
     assert round(float(state.state), config["sensor"]["round"]) == expected_state
+    assert state.attributes.get(ATTR_STATE_CLASS) is SensorStateClass.MEASUREMENT
 
     return state
 
@@ -332,8 +346,8 @@ async def test_data_moving_average_with_zeroes(
     await hass.async_block_till_done()
     await hass.async_block_till_done()
 
-    assert len(events[2:]) == len(times)
-    for time, event in zip(times, events[2:], strict=True):
+    assert len(events[1:]) == len(times)
+    for time, event in zip(times, events[1:], strict=True):
         state = event.data["new_state"]
         derivative = round(float(state.state), config["sensor"]["round"])
 
@@ -391,9 +405,11 @@ async def test_data_moving_average_for_irregular_times(hass: HomeAssistant) -> N
     """Test derivative sensor state."""
     # We simulate the following situation:
     # The temperature rises 1 °C per minute for 30 minutes long.
-    # There is 60 random datapoints (and the start and end) and the signal is normally distributed
-    # around the expected value with ±0.1°C
-    # We use a time window of 1 minute and expect an error of less than the standard deviation. (0.01)
+    # There is 60 random datapoints (and the start and end) and
+    # the signal is normally distributed around the expected
+    # value with ±0.1°C
+    # We use a time window of 1 minute and expect an error of
+    # less than the standard deviation. (0.01)
 
     time_window = 60
     random.seed(0)
@@ -433,12 +449,15 @@ async def test_data_moving_average_for_irregular_times(hass: HomeAssistant) -> N
 
 async def test_double_signal_after_delay(hass: HomeAssistant) -> None:
     """Test derivative sensor state."""
-    # The old algorithm would produce extreme values if, after a delay longer than the time window
-    # there would be two signals, a large spike would be produced. Check explicitly for this situation
+    # The old algorithm would produce extreme values if, after
+    # a delay longer than the time window there would be two
+    # signals, a large spike would be produced. Check
+    # explicitly for this situation
     time_window = 60
     times = [*range(time_window * 10), time_window * 20, time_window * 20 + 0.01]
 
-    # just apply sine as some sort of temperature change and make sure the change after the delay is very small
+    # just apply sine as some sort of temperature change and
+    # make sure the change after the delay is very small
     temperature_values = [sin(x) for x in times]
     temperature_values[-2] = temperature_values[-3] + 0.01
     temperature_values[-1] = temperature_values[-2] + 0.01
@@ -638,6 +657,137 @@ async def test_sub_intervals_with_time_window(hass: HomeAssistant) -> None:
             assert expect_min <= derivative <= expect_max, f"Failed at time {time}"
 
 
+@pytest.mark.parametrize(
+    ("extra_config", "source_unit", "source_class", "derived_unit", "derived_class"),
+    [
+        (
+            {},
+            UnitOfEnergy.KILO_WATT_HOUR,
+            SensorDeviceClass.ENERGY,
+            UnitOfPower.KILO_WATT,
+            SensorDeviceClass.POWER,
+        ),
+        (
+            {},
+            UnitOfEnergy.TERA_WATT_HOUR,
+            SensorDeviceClass.ENERGY,
+            UnitOfPower.TERA_WATT,
+            SensorDeviceClass.POWER,
+        ),
+        (
+            {"unit_prefix": "m"},
+            UnitOfEnergy.WATT_HOUR,
+            SensorDeviceClass.ENERGY_STORAGE,
+            UnitOfPower.MILLIWATT,
+            SensorDeviceClass.POWER,
+        ),
+        (
+            {"unit_prefix": "k"},
+            UnitOfEnergy.WATT_HOUR,
+            SensorDeviceClass.ENERGY,
+            UnitOfPower.KILO_WATT,
+            SensorDeviceClass.POWER,
+        ),
+        (
+            {"unit_prefix": "n"},
+            UnitOfEnergy.WATT_HOUR,
+            SensorDeviceClass.ENERGY,
+            "nW",
+            None,
+        ),
+        (
+            {},
+            "GB",
+            SensorDeviceClass.DATA_SIZE,
+            "GB/h",
+            None,
+        ),
+        (
+            {"unit_time": "s"},
+            "GB",
+            SensorDeviceClass.DATA_SIZE,
+            UnitOfDataRate.GIGABYTES_PER_SECOND,
+            SensorDeviceClass.DATA_RATE,
+        ),
+        (
+            {},
+            "km",
+            SensorDeviceClass.DISTANCE,
+            UnitOfSpeed.KILOMETERS_PER_HOUR,
+            SensorDeviceClass.SPEED,
+        ),
+        (
+            {},
+            "m³",
+            SensorDeviceClass.GAS,
+            UnitOfVolumeFlowRate.CUBIC_METERS_PER_HOUR,
+            SensorDeviceClass.VOLUME_FLOW_RATE,
+        ),
+        (
+            {"unit_time": "min"},
+            "gal",
+            SensorDeviceClass.WATER,
+            UnitOfVolumeFlowRate.GALLONS_PER_MINUTE,
+            SensorDeviceClass.VOLUME_FLOW_RATE,
+        ),
+        (
+            {},
+            UnitOfEnergy.KILO_WATT_HOUR,
+            "not_a_real_device_class",
+            "kWh/h",
+            None,
+        ),
+    ],
+)
+async def test_device_classes(
+    extra_config: dict[str, Any],
+    source_unit: str,
+    source_class: str,
+    derived_unit: str,
+    derived_class: str,
+    hass: HomeAssistant,
+) -> None:
+    """Test derivative sensor handles unit conversions and device classes."""
+    config = {
+        "sensor": {
+            "platform": "derivative",
+            "name": "derivative",
+            "source": "sensor.source",
+            "round": 2,
+            "unit_time": "h",
+            **extra_config,
+        }
+    }
+
+    assert await async_setup_component(hass, "sensor", config)
+    entity_id = config["sensor"]["source"]
+    base = dt_util.utcnow()
+    with freeze_time(base) as freezer:
+        hass.states.async_set(
+            entity_id,
+            1000,
+            {
+                "unit_of_measurement": source_unit,
+                "device_class": source_class,
+            },
+        )
+        await hass.async_block_till_done()
+        freezer.move_to(dt_util.utcnow() + timedelta(seconds=3600))
+        hass.states.async_set(
+            entity_id,
+            2000,
+            {
+                "unit_of_measurement": source_unit,
+                "device_class": source_class,
+            },
+        )
+        await hass.async_block_till_done()
+    state = hass.states.get("sensor.derivative")
+    assert state is not None
+    assert state.attributes.get("unit_of_measurement") == derived_unit
+    assert state.attributes.get("device_class") == derived_class
+
+
 async def test_prefix(hass: HomeAssistant) -> None:
     """Test derivative sensor state using a power source."""
     config = {
@@ -711,13 +861,13 @@ async def test_suffix(hass: HomeAssistant) -> None:
 
 
 async def test_total_increasing_reset(hass: HomeAssistant) -> None:
-    """Test derivative sensor state with total_increasing sensor input where it should ignore the reset value."""
+    """Test derivative with total_increasing input where it should ignore the reset."""
     times = [0, 20, 30, 35, 40, 50, 60]
     values = [0, 10, 30, 40, 0, 10, 40]
     expected_times = [0, 20, 30, 35, 50, 60]
     expected_values = ["0.00", "0.50", "2.00", "2.00", "1.00", "3.00"]
 
-    config, entity_id = await _setup_sensor(hass, {"unit_time": UnitOfTime.SECONDS})
+    _config, entity_id = await _setup_sensor(hass, {"unit_time": UnitOfTime.SECONDS})
 
     base_time = dt_util.utcnow()
     actual_times = []
@@ -744,6 +894,58 @@ async def test_total_increasing_reset(hass: HomeAssistant) -> None:
     assert actual_values == expected_values
 
 
+@pytest.mark.parametrize("bad_state", [STATE_UNAVAILABLE, STATE_UNKNOWN])
+@pytest.mark.parametrize(
+    ("extra_config", "active_value", "recovered_value"),
+    [
+        pytest.param({}, "5.00", "1.00", id="no_time_window"),
+        pytest.param(
+            {"time_window": {"seconds": 60}}, "0.83", "0.17", id="time_window"
+        ),
+    ],
+)
+async def test_total_increasing_reset_while_unavailable(
+    hass: HomeAssistant,
+    bad_state: str,
+    extra_config: dict[str, Any],
+    active_value: str,
+    recovered_value: str,
+) -> None:
+    """Test derivative recovers when a total_increasing source resets while unavailable.
+
+    Regression test for a total_increasing source (e.g. a daily energy sensor)
+    that briefly goes unavailable/unknown around midnight and returns with its
+    value reset to 0. The derivative must report a zero rate of change on the
+    reset sample and must not stay stuck in the unavailable/unknown state until
+    the next state change is received, regardless of the configured time window.
+    The first normal sample after the reset must produce a sensible positive
+    rate again, proving the source value was re-baselined to the post-reset
+    value rather than the stale pre-reset one.
+    """
+    times = [0, 10, 20, 30, 40]
+    values = [0, 50, bad_state, 0, 10]
+    expected_states = ["0.00", active_value, bad_state, "0.00", recovered_value]
+
+    _config, entity_id = await _setup_sensor(
+        hass, {"unit_time": UnitOfTime.SECONDS} | extra_config
+    )
+
+    base_time = dt_util.utcnow()
+    with freeze_time(base_time) as freezer:
+        for time, value, expected in zip(times, values, expected_states, strict=True):
+            freezer.move_to(base_time + timedelta(seconds=time))
+            hass.states.async_set(
+                entity_id,
+                value,
+                {ATTR_STATE_CLASS: SensorStateClass.TOTAL_INCREASING},
+            )
+            await hass.async_block_till_done()
+
+            state = hass.states.get("sensor.power")
+            assert state is not None
+            assert state.state == expected
+
+
 async def test_device_id(
     hass: HomeAssistant,
     entity_registry: er.EntityRegistry,
@@ -765,7 +967,7 @@ async def test_device_id(
         device_id=source_device_entry.id,
     )
     await hass.async_block_till_done()
-    assert entity_registry.async_get("sensor.test_source") is not None
+    assert entity_registry.async_get(source_entity.entity_id) is not None
 
     derivative_config_entry = MockConfigEntry(
         data={},
@@ -773,7 +975,7 @@ async def test_device_id(
         options={
             "name": "Derivative",
             "round": 1.0,
-            "source": "sensor.test_source",
+            "source": source_entity.entity_id,
             "time_window": {"seconds": 0.0},
             "unit_prefix": "k",
             "unit_time": "min",
@@ -786,9 +988,52 @@ async def test_device_id(
     assert await hass.config_entries.async_setup(derivative_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    derivative_entity = entity_registry.async_get("sensor.derivative")
+    derivative_entity = entity_registry.async_get("sensor.mock_title_derivative")
     assert derivative_entity is not None
     assert derivative_entity.device_id == source_entity.device_id
+
+
+async def test_device_id_yaml(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    device_registry: dr.DeviceRegistry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test no device is set for a YAML-configured Derivative."""
+    source_config_entry = MockConfigEntry()
+    source_config_entry.add_to_hass(hass)
+    source_device_entry = device_registry.async_get_or_create(
+        config_entry_id=source_config_entry.entry_id,
+        identifiers={("sensor", "identifier_test")},
+        connections={("mac", "30:31:32:33:34:35")},
+    )
+    entity_registry.async_get_or_create(
+        "sensor",
+        "test",
+        "source",
+        config_entry=source_config_entry,
+        device_id=source_device_entry.id,
+    )
+    await hass.async_block_till_done()
+
+    assert await async_setup_component(
+        hass,
+        "sensor",
+        {
+            "sensor": {
+                "platform": "derivative",
+                "name": "Derivative",
+                "source": "sensor.test_source",
+                "unique_id": "derivative_yaml",
+            }
+        },
+    )
+    await hass.async_block_till_done()
+
+    derivative_entity = entity_registry.async_get("sensor.derivative")
+    assert derivative_entity is not None
+    assert derivative_entity.device_id is None
+    assert "attempts to attach a device to an entity" not in caplog.text
 
 
 @pytest.mark.parametrize("bad_state", [STATE_UNAVAILABLE, STATE_UNKNOWN, "foo"])
@@ -881,13 +1126,11 @@ async def test_unavailable_boot(
                 State(
                     "sensor.power",
                     restore_state,
-                    {
-                        "unit_of_measurement": "W",
-                    },
+                    {"unit_of_measurement": "kW", "device_class": "power"},
                 ),
                 {
                     "native_value": restore_state,
-                    "native_unit_of_measurement": "W",
+                    "native_unit_of_measurement": "kW",
                 },
             ),
         ],
@@ -898,12 +1141,16 @@ async def test_unavailable_boot(
         "name": "power",
         "source": "sensor.energy",
         "round": 2,
-        "unit_time": "s",
+        "unit_time": "h",
     }
 
     config = {"sensor": config}
     entity_id = config["sensor"]["source"]
-    hass.states.async_set(entity_id, STATE_UNAVAILABLE, {})
+    hass.states.async_set(
+        entity_id,
+        STATE_UNAVAILABLE,
+        {"unit_of_measurement": "kWh", "device_class": "energy"},
+    )
     await hass.async_block_till_done()
 
     assert await async_setup_component(hass, "sensor", config)
@@ -913,11 +1160,14 @@ async def test_unavailable_boot(
     assert state is not None
     # Sensor is unavailable as source is unavailable
     assert state.state == STATE_UNAVAILABLE
+    assert state.attributes.get(ATTR_DEVICE_CLASS) == "power"
 
     base = dt_util.utcnow()
     with freeze_time(base) as freezer:
-        freezer.move_to(base + timedelta(seconds=1))
-        hass.states.async_set(entity_id, 10, {})
+        freezer.move_to(base + timedelta(hours=1))
+        hass.states.async_set(
+            entity_id, 10, {"unit_of_measurement": "kWh", "device_class": "energy"}
+        )
         await hass.async_block_till_done()
 
         state = hass.states.get("sensor.power")
@@ -926,11 +1176,160 @@ async def test_unavailable_boot(
         # so just hold until the next tick
         assert state.state == restore_state
 
-        freezer.move_to(base + timedelta(seconds=2))
-        hass.states.async_set(entity_id, 15, {})
+        freezer.move_to(base + timedelta(hours=2))
+        hass.states.async_set(
+            entity_id, 15, {"unit_of_measurement": "kWh", "device_class": "energy"}
+        )
         await hass.async_block_till_done()
 
         state = hass.states.get("sensor.power")
         assert state is not None
-        # Now that the source sensor has two valid datapoints, we can calculate derivative
+        # Now that the source sensor has two valid datapoints,
+        # we can calculate derivative
         assert state.state == "5.00"
+        assert state.attributes.get("unit_of_measurement") == "kW"
+
+
+async def test_source_unit_change(
+    hass: HomeAssistant,
+) -> None:
+    """Test how derivative responds when the source sensor changes unit."""
+    source_id = "sensor.source"
+    config = {
+        "sensor": {
+            "platform": "derivative",
+            "name": "derivative",
+            "source": source_id,
+            "unit_time": "s",
+        }
+    }
+
+    assert await async_setup_component(hass, "sensor", config)
+    await hass.async_block_till_done()
+    entity_id = "sensor.derivative"
+
+    state = hass.states.get(entity_id)
+    assert state.state == STATE_UNAVAILABLE
+    assert state.attributes.get("unit_of_measurement") is None
+
+    time = dt_util.utcnow()
+    with freeze_time(time) as freezer:
+        # First state update of the source.
+        # Derivative does not learn the UoM yet.
+        hass.states.async_set(source_id, "5", {"unit_of_measurement": "cats"})
+        await hass.async_block_till_done()
+        state = hass.states.get(entity_id)
+        assert state.state == "0.000"
+        assert state.attributes.get("unit_of_measurement") == "cats/s"
+
+        # Second state update of the source.
+        time += timedelta(seconds=1)
+        freezer.move_to(time)
+        hass.states.async_set(source_id, "7", {"unit_of_measurement": "cats"})
+        await hass.async_block_till_done()
+        state = hass.states.get(entity_id)
+        assert state.state == "2.000"
+        assert state.attributes.get("unit_of_measurement") == "cats/s"
+
+        # Third state update of the source, source unit changes to dogs.
+        # Derivative switches to dogs/s, and resets state to zero, as we
+        # don't want to generate bogus data from the change.
+        time += timedelta(seconds=1)
+        freezer.move_to(time)
+        hass.states.async_set(source_id, "12", {"unit_of_measurement": "dogs"})
+        await hass.async_block_till_done()
+        state = hass.states.get(entity_id)
+        assert state.state == "0.000"
+        assert state.attributes.get("unit_of_measurement") == "dogs/s"
+
+        # Fourth state update of the source, still dogs.
+        # Now correctly updating derivative as dogs/s.
+        time += timedelta(seconds=1)
+        freezer.move_to(time)
+        hass.states.async_set(source_id, "20", {"unit_of_measurement": "dogs"})
+        await hass.async_block_till_done()
+        state = hass.states.get(entity_id)
+        assert state.state == "8.000"
+        assert state.attributes.get("unit_of_measurement") == "dogs/s"
+
+
+async def test_reload(hass: HomeAssistant) -> None:
+    """Test hot-reloading derivative YAML sensors."""
+    hass.state = ha.CoreState.not_running
+    hass.states.async_set("sensor.energy", "0.0")
+
+    config = {
+        "sensor": [
+            {
+                "platform": "derivative",
+                "name": "derivative",
+                "source": "sensor.energy",
+                "unit": "kW",
+            },
+            {
+                "platform": "derivative",
+                "name": "derivative_remove",
+                "source": "sensor.energy",
+                "unit": "kW",
+            },
+        ]
+    }
+
+    assert await async_setup_component(hass, "sensor", config)
+
+    await hass.async_block_till_done()
+    await hass.async_start()
+    await hass.async_block_till_done()
+
+    assert len(hass.states.async_all()) == 3
+    state = hass.states.get("sensor.derivative")
+    assert state is not None
+    assert state.attributes.get("unit_of_measurement") == "kW"
+    assert hass.states.get("sensor.derivative_remove")
+
+    yaml_path = get_fixture_path("configuration.yaml", "derivative")
+    with patch.object(hass_config, "YAML_CONFIG_FILE", yaml_path):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_RELOAD,
+            {},
+            blocking=True,
+        )
+        await hass.async_block_till_done()
+
+    assert len(hass.states.async_all()) == 3
+
+    # Check that we can change the unit of an existing sensor
+    state = hass.states.get("sensor.derivative")
+    assert state is not None
+    assert state.attributes.get("unit_of_measurement") == "W"
+
+    # Check that we can remove a derivative sensor
+    assert hass.states.get("sensor.derivative_remove") is None
+
+    # Check that we can add a new derivative sensor
+    assert hass.states.get("sensor.derivative_new")
+
+
+async def test_unique_id(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """Test YAML-based derivative with unique id."""
+    source_id = "sensor.source"
+    config = {
+        "sensor": {
+            "platform": "derivative",
+            "name": "derivative",
+            "source": source_id,
+            "unique_id": "my unique id",
+        }
+    }
+
+    assert await async_setup_component(hass, "sensor", config)
+    await hass.async_block_till_done()
+    entity_id = "sensor.derivative"
+
+    entry = entity_registry.async_get(entity_id)
+    assert entry
+    assert entry.unique_id == "my unique id"

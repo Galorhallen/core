@@ -1,7 +1,5 @@
 """Handles Hue resource of type `device` mapping to Home Assistant device."""
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING
 
 from aiohue.v2 import HueBridgeV2
@@ -9,6 +7,7 @@ from aiohue.v2.controllers.events import EventType
 from aiohue.v2.controllers.groups import Room, Zone
 from aiohue.v2.models.device import Device
 from aiohue.v2.models.resource import ResourceTypes
+from aiohue.v2.models.service_group import ServiceGroup
 
 from homeassistant.const import (
     ATTR_CONNECTIONS,
@@ -19,7 +18,6 @@ from homeassistant.const import (
     ATTR_NAME,
     ATTR_SUGGESTED_AREA,
     ATTR_SW_VERSION,
-    ATTR_VIA_DEVICE,
 )
 from homeassistant.core import callback
 from homeassistant.helpers import device_registry as dr
@@ -39,18 +37,22 @@ async def async_setup_devices(bridge: HueBridge):
     dev_controller = api.devices
 
     @callback
-    def add_device(hue_resource: Device | Room | Zone) -> dr.DeviceEntry:
+    def add_device(hue_resource: Device | Room | Zone | ServiceGroup) -> dr.DeviceEntry:
         """Register a Hue device in device registry."""
-        if isinstance(hue_resource, (Room, Zone)):
+        if isinstance(hue_resource, (Room, Zone, ServiceGroup)):
             # Register a Hue Room/Zone as service in HA device registry.
             return dev_reg.async_get_or_create(
                 config_entry_id=entry.entry_id,
                 entry_type=dr.DeviceEntryType.SERVICE,
                 identifiers={(DOMAIN, hue_resource.id)},
                 name=hue_resource.metadata.name,
-                model=hue_resource.type.value.title(),
+                model=hue_resource.type.value.replace("_", " ").title(),
                 manufacturer=api.config.bridge_device.product_data.manufacturer_name,
-                via_device=(DOMAIN, api.config.bridge_device.id),
+                via_device_id=dr.async_get_device_id_by_identifier(
+                    hass,
+                    (DOMAIN, api.config.bridge_device.id),
+                    config_entry_id=entry.entry_id,
+                ),
                 suggested_area=hue_resource.metadata.name
                 if hue_resource.type == ResourceTypes.ROOM
                 else None,
@@ -69,7 +71,13 @@ async def async_setup_devices(bridge: HueBridge):
         if hue_resource.id == api.config.bridge_device.id:
             params[ATTR_IDENTIFIERS].add((DOMAIN, api.config.bridge_id))
         else:
-            params[ATTR_VIA_DEVICE] = (DOMAIN, api.config.bridge_device.id)
+            # The bridge device is always registered first (see sort below), so
+            # its id can be resolved here for the via_device link.
+            params["via_device_id"] = dr.async_get_device_id_by_identifier(
+                hass,
+                (DOMAIN, api.config.bridge_device.id),
+                config_entry_id=entry.entry_id,
+            )
         zigbee = dev_controller.get_zigbee_connectivity(hue_resource.id)
         if zigbee and zigbee.mac_address:
             params[ATTR_CONNECTIONS] = {(dr.CONNECTION_NETWORK_MAC, zigbee.mac_address)}
@@ -79,13 +87,15 @@ async def async_setup_devices(bridge: HueBridge):
     @callback
     def remove_device(hue_device_id: str) -> None:
         """Remove device from registry."""
-        if device := dev_reg.async_get_device(identifiers={(DOMAIN, hue_device_id)}):
+        if device := dev_reg.async_get_device_by_identifier(
+            (DOMAIN, hue_device_id), entry.entry_id
+        ):
             # note: removal of any underlying entities is handled by core
             dev_reg.async_remove_device(device.id)
 
     @callback
     def handle_device_event(
-        evt_type: EventType, hue_resource: Device | Room | Zone
+        evt_type: EventType, hue_resource: Device | Room | Zone | ServiceGroup
     ) -> None:
         """Handle event from Hue controller."""
         if evt_type == EventType.RESOURCE_DELETED:
@@ -101,6 +111,7 @@ async def async_setup_devices(bridge: HueBridge):
     known_devices = [add_device(hue_device) for hue_device in hue_devices]
     known_devices += [add_device(hue_room) for hue_room in api.groups.room]
     known_devices += [add_device(hue_zone) for hue_zone in api.groups.zone]
+    known_devices += [add_device(sg) for sg in api.config.service_group]
 
     # Check for nodes that no longer exist and remove them
     for device in dr.async_entries_for_config_entry(dev_reg, entry.entry_id):
@@ -111,3 +122,4 @@ async def async_setup_devices(bridge: HueBridge):
     entry.async_on_unload(dev_controller.subscribe(handle_device_event))
     entry.async_on_unload(api.groups.room.subscribe(handle_device_event))
     entry.async_on_unload(api.groups.zone.subscribe(handle_device_event))
+    entry.async_on_unload(api.config.service_group.subscribe(handle_device_event))

@@ -1,40 +1,54 @@
 """Config flow to configure esphome component."""
 
-from __future__ import annotations
-
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 import json
 import logging
-from typing import Any, cast
+from typing import Any, cast, override
 
 from aioesphomeapi import (
     APIClient,
     APIConnectionError,
+    BluetoothProxyFeature,
+    ConnectionClosedEvent,
     DeviceInfo,
+    DisconnectReason,
     InvalidAuthAPIError,
     InvalidEncryptionKeyAPIError,
     RequiresEncryptionAPIError,
     ResolveAPIError,
+    wifi_mac_to_bluetooth_mac,
 )
 import aiohttp
 import voluptuous as vol
 
 from homeassistant.components import zeroconf
+from homeassistant.components.bluetooth import BluetoothScanningMode
 from homeassistant.config_entries import (
+    SOURCE_ESPHOME,
     SOURCE_IGNORE,
     SOURCE_REAUTH,
     SOURCE_RECONFIGURE,
     ConfigEntry,
+    ConfigEntryState,
     ConfigFlow,
     ConfigFlowResult,
-    OptionsFlow,
+    FlowType,
+    OptionsFlowWithReload,
 )
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT
 from homeassistant.core import callback
-from homeassistant.data_entry_flow import AbortFlow
+from homeassistant.data_entry_flow import AbortFlow, FlowResultType
+from homeassistant.helpers import discovery_flow
 from homeassistant.helpers.device_registry import format_mac
+from homeassistant.helpers.importlib import async_import_module
+from homeassistant.helpers.selector import (
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+)
 from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
+from homeassistant.helpers.service_info.esphome import ESPHomeServiceInfo
 from homeassistant.helpers.service_info.hassio import HassioServiceInfo
 from homeassistant.helpers.service_info.mqtt import MqttServiceInfo
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
@@ -42,10 +56,12 @@ from homeassistant.util.json import json_loads_object
 
 from .const import (
     CONF_ALLOW_SERVICE_CALLS,
+    CONF_BLUETOOTH_SCANNING_MODE,
     CONF_DEVICE_NAME,
     CONF_NOISE_PSK,
     CONF_SUBSCRIBE_LOGS,
     DEFAULT_ALLOW_SERVICE_CALLS,
+    DEFAULT_BLUETOOTH_SCANNING_MODE,
     DEFAULT_NEW_CONFIG_ALLOW_ALLOW_SERVICE_CALLS,
     DEFAULT_PORT,
     DOMAIN,
@@ -55,12 +71,30 @@ from .encryption_key_storage import async_get_encryption_key_storage
 from .entry_data import ESPHomeConfigEntry
 from .manager import async_replace_device
 
+ERROR_PROVISIONING_CLOSED = "provisioning_closed"
 ERROR_REQUIRES_ENCRYPTION_KEY = "requires_encryption_key"
 ERROR_INVALID_ENCRYPTION_KEY = "invalid_psk"
+ERROR_INVALID_PASSWORD_AUTH = "invalid_auth"
 _LOGGER = logging.getLogger(__name__)
 
-ZERO_NOISE_PSK = "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
+# A deliberately wrong key (base64 of thirty two ASCII zero characters, not
+# zero bytes) used only to elicit the server hello so the device name can be
+# read. Not to be confused with aioesphomeapi.ZERO_NOISE_PSK, the well known
+# all zeros provisioning key.
+PROBE_NOISE_PSK = "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
 DEFAULT_NAME = "ESPHome"
+
+_BLUETOOTH_SCANNING_MODE_SELECTOR = SelectSelector(
+    SelectSelectorConfig(
+        options=[
+            BluetoothScanningMode.AUTO.value,
+            BluetoothScanningMode.ACTIVE.value,
+            BluetoothScanningMode.PASSIVE.value,
+        ],
+        translation_key="bluetooth_scanning_mode",
+        mode=SelectSelectorMode.DROPDOWN,
+    )
+)
 
 
 class EsphomeFlowHandler(ConfigFlow, domain=DOMAIN):
@@ -74,6 +108,7 @@ class EsphomeFlowHandler(ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         """Initialize flow."""
         self._host: str | None = None
+        self._connected_address: str | None = None
         self.__name: str | None = None
         self._port: int | None = None
         self._password: str | None = None
@@ -107,6 +142,7 @@ class EsphomeFlowHandler(ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    @override
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -137,7 +173,23 @@ class EsphomeFlowHandler(ConfigFlow, domain=DOMAIN):
             self._password = ""
             return await self._async_authenticate_or_add()
 
+        if error == ERROR_INVALID_PASSWORD_AUTH or (
+            error is None and self._device_info and self._device_info.uses_password
+        ):
+            return await self.async_step_authenticate()
+
         if error is None and entry_data.get(CONF_NOISE_PSK):
+            # Device was configured with encryption but now connects without it.
+            # Check if it's the same device before offering to remove encryption.
+            if self._reauth_entry.unique_id and self._device_mac:
+                expected_mac = format_mac(self._reauth_entry.unique_id)
+                actual_mac = format_mac(self._device_mac)
+                if expected_mac != actual_mac:
+                    # Different device at the same IP -
+                    # do not offer to remove encryption
+                    return self._async_abort_wrong_device(
+                        self._reauth_entry, expected_mac, actual_mac
+                    )
             return await self.async_step_reauth_encryption_removed_confirm()
         return await self.async_step_reauth_confirm()
 
@@ -160,18 +212,24 @@ class EsphomeFlowHandler(ConfigFlow, domain=DOMAIN):
         """Handle reauthorization flow."""
         errors = {}
 
-        if (
-            await self._retrieve_encryption_key_from_storage()
-            or await self._retrieve_encryption_key_from_dashboard()
-        ):
-            error = await self.fetch_device_info()
-            if error is None:
-                return await self._async_authenticate_or_add()
-
-        if user_input is not None:
+        if user_input is None:
+            async for candidate in self._async_encryption_key_candidates():
+                self._noise_psk = candidate
+                error = await self.fetch_device_info()
+                if error is None:
+                    await self._async_repair_stored_key(candidate)
+                    return await self._async_authenticate_or_add()
+                if error != ERROR_INVALID_ENCRYPTION_KEY:
+                    # Not a key problem (device offline) — more keys
+                    # can't help, and the dashboard needn't be asked.
+                    errors["base"] = error
+                    break
+            self._noise_psk = None
+        else:
             self._noise_psk = user_input[CONF_NOISE_PSK]
             error = await self.fetch_device_info()
             if error is None:
+                await self._async_repair_stored_key(self._noise_psk)
                 return await self._async_authenticate_or_add()
             errors["base"] = error
 
@@ -226,20 +284,25 @@ class EsphomeFlowHandler(ConfigFlow, domain=DOMAIN):
                 # to get the device name which will allow us to populate
                 # the device name and hopefully get the encryption key
                 # from the dashboard.
-                self._noise_psk = ZERO_NOISE_PSK
+                self._noise_psk = PROBE_NOISE_PSK
                 response = await self.fetch_device_info()
                 self._noise_psk = None
 
-            # Try to retrieve an existing key from dashboard or storage.
-            if (
-                self._device_name
-                and await self._retrieve_encryption_key_from_dashboard()
-            ) or (
-                self._device_mac and await self._retrieve_encryption_key_from_storage()
-            ):
+            # Try every known key against the device — either source
+            # can be stale, and the first one must not shadow the other.
+            async for candidate in self._async_encryption_key_candidates():
+                self._noise_psk = candidate
                 response = await self.fetch_device_info()
+                if response is None:
+                    await self._async_repair_stored_key(candidate)
+                    break
+                if response != ERROR_INVALID_ENCRYPTION_KEY:
+                    # Not a key problem — don't leave an unproven
+                    # candidate behind for a later retry.
+                    self._noise_psk = None
+                    break
 
-            # If the fetched key is invalid, unset it again.
+            # If no fetched key worked, unset again for the manual step.
             if response == ERROR_INVALID_ENCRYPTION_KEY:
                 self._noise_psk = None
                 response = ERROR_REQUIRES_ENCRYPTION_KEY
@@ -270,6 +333,7 @@ class EsphomeFlowHandler(ConfigFlow, domain=DOMAIN):
             description_placeholders={"name": self._async_get_human_readable_name()},
         )
 
+    @override
     async def async_step_zeroconf(
         self, discovery_info: ZeroconfServiceInfo
     ) -> ConfigFlowResult:
@@ -296,6 +360,25 @@ class EsphomeFlowHandler(ConfigFlow, domain=DOMAIN):
 
         # Check if already configured
         await self.async_set_unique_id(mac_address)
+
+        # Convert WiFi MAC to Bluetooth MAC and notify Improv BLE if waiting
+        # ESPHome devices use WiFi MAC + 1 for Bluetooth MAC
+        # Late import to avoid circular dependency
+        # NOTE: Do not change to hass.config.components check - improv_ble is
+        # config_flow only and may not be in the components registry
+        if improv_ble := await async_import_module(
+            self.hass, "homeassistant.components.improv_ble"
+        ):
+            ble_mac = wifi_mac_to_bluetooth_mac(mac_address)
+            improv_ble.async_register_next_flow(self.hass, ble_mac, self.flow_id)
+            _LOGGER.debug(
+                "Notified Improv BLE of flow %s for BLE MAC %s"
+                " (derived from WiFi MAC %s)",
+                self.flow_id,
+                ble_mac,
+                mac_address,
+            )
+
         await self._async_validate_mac_abort_configured(
             mac_address, self._host, self._port
         )
@@ -321,6 +404,11 @@ class EsphomeFlowHandler(ConfigFlow, domain=DOMAIN):
         if configured_host == host and (port is None or configured_port == port):
             # Don't probe to verify the mac is correct since
             # the host matches (and port matches if provided).
+            raise AbortFlow("already_configured")
+        # If the entry is loaded and the device is currently connected,
+        # don't update the host. This prevents transient mDNS announcements
+        # (e.g., during WiFi mesh roaming) from overwriting a working connection.
+        if entry.state is ConfigEntryState.LOADED and entry.runtime_data.available:
             raise AbortFlow("already_configured")
         configured_psk: str | None = entry.data.get(CONF_NOISE_PSK)
         await self._fetch_device_info(host, port or configured_port, configured_psk)
@@ -358,6 +446,7 @@ class EsphomeFlowHandler(ConfigFlow, domain=DOMAIN):
             },
         )
 
+    @override
     async def async_step_mqtt(
         self, discovery_info: MqttServiceInfo
     ) -> ConfigFlowResult:
@@ -397,12 +486,13 @@ class EsphomeFlowHandler(ConfigFlow, domain=DOMAIN):
 
         return await self.async_step_discovery_confirm()
 
+    @override
     async def async_step_dhcp(
         self, discovery_info: DhcpServiceInfo
     ) -> ConfigFlowResult:
         """Handle DHCP discovery."""
         mac_address = format_mac(discovery_info.macaddress)
-        await self.async_set_unique_id(format_mac(mac_address))
+        await self.async_set_unique_id(mac_address)
         await self._async_validate_mac_abort_configured(
             mac_address, discovery_info.ip, None
         )
@@ -410,6 +500,7 @@ class EsphomeFlowHandler(ConfigFlow, domain=DOMAIN):
         # for configured devices.
         return self.async_abort(reason="already_configured")
 
+    @override
     async def async_step_hassio(
         self, discovery_info: HassioServiceInfo
     ) -> ConfigFlowResult:
@@ -479,21 +570,79 @@ class EsphomeFlowHandler(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Handle creating a new entry by removing the old one and creating new."""
         assert self._entry_with_name_conflict is not None
+        if self.source in (SOURCE_REAUTH, SOURCE_RECONFIGURE):
+            return self.async_update_reload_and_abort(
+                self._entry_with_name_conflict,
+                title=self._name,
+                unique_id=self.unique_id,
+                data=self._async_make_config_data(),
+                options={
+                    CONF_ALLOW_SERVICE_CALLS: (
+                        DEFAULT_NEW_CONFIG_ALLOW_ALLOW_SERVICE_CALLS
+                    ),
+                },
+            )
         await self.hass.config_entries.async_remove(
             self._entry_with_name_conflict.entry_id
         )
-        return self._async_create_entry()
+        return await self._async_create_entry()
 
-    @callback
-    def _async_create_entry(self) -> ConfigFlowResult:
+    async def _async_create_entry(self) -> ConfigFlowResult:
         """Create the config entry."""
         assert self._name is not None
+        assert self._device_info is not None
+
+        # Check if Z-Wave capabilities are present and start discovery flow
+        next_flow_id: str | None = None
+        # If the zwave_home_id is not set, we don't know if it's a fresh
+        # adapter, or the cable is just unplugged. So only start
+        # the zwave_js config flow automatically if there is a
+        # zwave_home_id present. If it's a fresh adapter, the manager
+        # will handle starting the flow once it gets the home id changed
+        # request from the ESPHome device.
+        if (
+            self._device_info.zwave_proxy_feature_flags
+            and self._device_info.zwave_home_id
+        ):
+            assert self._connected_address is not None
+            assert self._port is not None
+
+            # Start Z-Wave discovery flow and get the flow ID
+            zwave_result = await self.hass.config_entries.flow.async_init(
+                "zwave_js",
+                context={
+                    "source": SOURCE_ESPHOME,
+                    "discovery_key": discovery_flow.DiscoveryKey(
+                        domain=DOMAIN,
+                        key=self._device_info.mac_address,
+                        version=1,
+                    ),
+                },
+                data=ESPHomeServiceInfo(
+                    name=self._device_info.name,
+                    zwave_home_id=self._device_info.zwave_home_id,
+                    ip_address=self._connected_address,
+                    port=self._port,
+                    noise_psk=self._noise_psk,
+                ),
+            )
+            if zwave_result["type"] in (
+                FlowResultType.ABORT,
+                FlowResultType.CREATE_ENTRY,
+            ):
+                _LOGGER.debug(
+                    "Unable to continue created Z-Wave JS config flow: %s", zwave_result
+                )
+            else:
+                next_flow_id = zwave_result["flow_id"]
+
         return self.async_create_entry(
             title=self._name,
             data=self._async_make_config_data(),
             options={
                 CONF_ALLOW_SERVICE_CALLS: DEFAULT_NEW_CONFIG_ALLOW_ALLOW_SERVICE_CALLS,
             },
+            next_flow=(FlowType.CONFIG_FLOW, next_flow_id) if next_flow_id else None,
         )
 
     @callback
@@ -508,6 +657,28 @@ class EsphomeFlowHandler(ConfigFlow, domain=DOMAIN):
             CONF_DEVICE_NAME: self._device_name,
         }
 
+    @callback
+    def _async_abort_wrong_device(
+        self, entry: ConfigEntry, expected_mac: str, actual_mac: str
+    ) -> ConfigFlowResult:
+        """Abort flow because a different device was found at the IP address."""
+        assert self._host is not None
+        assert self._device_name is not None
+        if self.source == SOURCE_RECONFIGURE:
+            reason = "reconfigure_unique_id_changed"
+        else:
+            reason = "reauth_unique_id_changed"
+        return self.async_abort(
+            reason=reason,
+            description_placeholders={
+                "name": entry.data.get(CONF_DEVICE_NAME, entry.title),
+                "host": self._host,
+                "expected_mac": expected_mac,
+                "unexpected_mac": actual_mac,
+                "unexpected_device_name": self._device_name,
+            },
+        )
+
     async def _async_validated_connection(self) -> ConfigFlowResult:
         """Handle validated connection."""
         if self.source == SOURCE_RECONFIGURE:
@@ -518,7 +689,7 @@ class EsphomeFlowHandler(ConfigFlow, domain=DOMAIN):
             if entry.data.get(CONF_DEVICE_NAME) == self._device_name:
                 self._entry_with_name_conflict = entry
                 return await self.async_step_name_conflict()
-        return self._async_create_entry()
+        return await self._async_create_entry()
 
     async def _async_reauth_validated_connection(self) -> ConfigFlowResult:
         """Handle reauth validated connection."""
@@ -539,17 +710,10 @@ class EsphomeFlowHandler(ConfigFlow, domain=DOMAIN):
         # Reauth was triggered a while ago, and since than
         # a new device resides at the same IP address.
         assert self._device_name is not None
-        return self.async_abort(
-            reason="reauth_unique_id_changed",
-            description_placeholders={
-                "name": self._reauth_entry.data.get(
-                    CONF_DEVICE_NAME, self._reauth_entry.title
-                ),
-                "host": self._host,
-                "expected_mac": format_mac(self._reauth_entry.unique_id),
-                "unexpected_mac": format_mac(self.unique_id),
-                "unexpected_device_name": self._device_name,
-            },
+        return self._async_abort_wrong_device(
+            self._reauth_entry,
+            format_mac(self._reauth_entry.unique_id),
+            format_mac(self.unique_id),
         )
 
     async def _async_reconfig_validated_connection(self) -> ConfigFlowResult:
@@ -589,17 +753,10 @@ class EsphomeFlowHandler(ConfigFlow, domain=DOMAIN):
         if self._reconfig_entry.data.get(CONF_DEVICE_NAME) == self._device_name:
             self._entry_with_name_conflict = self._reconfig_entry
             return await self.async_step_name_conflict()
-        return self.async_abort(
-            reason="reconfigure_unique_id_changed",
-            description_placeholders={
-                "name": self._reconfig_entry.data.get(
-                    CONF_DEVICE_NAME, self._reconfig_entry.title
-                ),
-                "host": self._host,
-                "expected_mac": format_mac(self._reconfig_entry.unique_id),
-                "unexpected_mac": format_mac(self.unique_id),
-                "unexpected_device_name": self._device_name,
-            },
+        return self._async_abort_wrong_device(
+            self._reconfig_entry,
+            format_mac(self._reconfig_entry.unique_id),
+            format_mac(self.unique_id),
         )
 
     async def async_step_encryption_key(
@@ -611,6 +768,7 @@ class EsphomeFlowHandler(ConfigFlow, domain=DOMAIN):
             self._noise_psk = user_input[CONF_NOISE_PSK]
             error = await self.fetch_device_info()
             if error is None:
+                await self._async_repair_stored_key(self._noise_psk)
                 return await self._async_authenticate_or_add()
             errors["base"] = error
 
@@ -672,13 +830,24 @@ class EsphomeFlowHandler(ConfigFlow, domain=DOMAIN):
         cli = APIClient(
             host,
             port or DEFAULT_PORT,
-            "",
+            self._password or "",
             zeroconf_instance=zeroconf_instance,
             noise_psk=noise_psk,
         )
+        provisioning_closed = False
+
+        def _on_connection_closed(event: ConnectionClosedEvent) -> None:
+            nonlocal provisioning_closed
+            if event.reason is DisconnectReason.PROVISIONING_CLOSED:
+                provisioning_closed = True
+
+        cli.add_connection_closed_callback(_on_connection_closed)
         try:
             await cli.connect()
             self._device_info = await cli.device_info()
+            self._connected_address = cli.connected_address
+        except InvalidAuthAPIError:
+            return ERROR_INVALID_PASSWORD_AUTH
         except RequiresEncryptionAPIError:
             return ERROR_REQUIRES_ENCRYPTION_KEY
         except InvalidEncryptionKeyAPIError as ex:
@@ -693,6 +862,8 @@ class EsphomeFlowHandler(ConfigFlow, domain=DOMAIN):
         except ResolveAPIError:
             return "resolve_error"
         except APIConnectionError:
+            if provisioning_closed:
+                return ERROR_PROVISIONING_CLOSED
             return "connection_error"
         finally:
             await cli.disconnect(force=True)
@@ -747,62 +918,86 @@ class EsphomeFlowHandler(ConfigFlow, domain=DOMAIN):
 
         return None
 
-    async def _retrieve_encryption_key_from_dashboard(self) -> bool:
-        """Try to retrieve the encryption key from the dashboard.
-
-        Return boolean if a key was retrieved.
-        """
+    async def _async_get_key_from_dashboard(self) -> str | None:
+        """Return the dashboard's key for this device, or None."""
         if (
             self._device_name is None
             or (manager := await async_get_or_create_dashboard_manager(self.hass))
             is None
             or (dashboard := manager.async_get()) is None
         ):
-            return False
+            return None
 
         await dashboard.async_request_refresh()
         if not dashboard.last_update_success:
-            return False
+            _LOGGER.debug(
+                "Dashboard refresh failed; skipping dashboard key for %s",
+                self._device_name,
+            )
+            return None
 
         device = dashboard.data.get(self._device_name)
 
         if device is None:
-            return False
+            return None
 
         try:
-            noise_psk = await dashboard.api.get_encryption_key(device["configuration"])
+            return await dashboard.api.get_encryption_key(device["configuration"])
         except aiohttp.ClientError as err:
             _LOGGER.error("Error talking to the dashboard: %s", err)
-            return False
         except json.JSONDecodeError:
             _LOGGER.exception("Error parsing response from dashboard")
-            return False
+        return None
 
-        self._noise_psk = noise_psk
-        return True
+    @callback
+    def _async_get_storage_mac(self) -> str | None:
+        """MAC for encryption-key storage, from flow state or the reauth entry."""
+        if self._device_mac is not None:
+            return self._device_mac
+        if self.source == SOURCE_REAUTH:
+            return self._reauth_entry.unique_id
+        return None
 
-    async def _retrieve_encryption_key_from_storage(self) -> bool:
-        """Try to retrieve the encryption key from storage.
-
-        Return boolean if a key was retrieved.
-        """
-        # Try to get MAC address from current flow state or reauth entry
-        mac_address = self._device_mac
-        if mac_address is None and self._reauth_entry is not None:
-            # In reauth flow, get MAC from the existing entry's unique_id
-            mac_address = self._reauth_entry.unique_id
-
-        assert mac_address is not None
-
+    async def _async_get_key_from_storage(self) -> str | None:
+        """Return the stored key for this device, or None."""
+        if (mac_address := self._async_get_storage_mac()) is None:
+            return None
         storage = await async_get_encryption_key_storage(self.hass)
-        if stored_key := await storage.async_get_key(mac_address):
-            self._noise_psk = stored_key
-            return True
+        return await storage.async_get_key(mac_address)
 
-        return False
+    async def _async_encryption_key_candidates(self) -> AsyncIterator[str]:
+        """Distinct candidate keys from storage then the dashboard, lazily.
+
+        The device connect is the only truth test: either source can be
+        stale, so both are offered instead of the first one shadowing
+        the other. Lazy so the dashboard isn't consulted when the
+        stored key already works.
+        """
+        seen: set[str] = set()
+        for source in (
+            self._async_get_key_from_storage,
+            self._async_get_key_from_dashboard,
+        ):
+            if (key := await source()) and key not in seen:
+                seen.add(key)
+                yield key
+
+    async def _async_repair_stored_key(self, key: str) -> None:
+        """Repair an existing stored key with the one proven to work on the device.
+
+        Repair-in-place only, never create: presence in the store means
+        "HA generated this key" and gates the device-side key wipe on
+        entry removal, so dashboard/user keys must not be enrolled.
+        """
+        if (mac_address := self._async_get_storage_mac()) is None:
+            return
+        storage = await async_get_encryption_key_storage(self.hass)
+        if (stored := await storage.async_get_key(mac_address)) and stored != key:
+            await storage.async_store_key(mac_address, key)
 
     @staticmethod
     @callback
+    @override
     def async_get_options_flow(
         config_entry: ESPHomeConfigEntry,
     ) -> OptionsFlowHandler:
@@ -810,7 +1005,7 @@ class EsphomeFlowHandler(ConfigFlow, domain=DOMAIN):
         return OptionsFlowHandler()
 
 
-class OptionsFlowHandler(OptionsFlow):
+class OptionsFlowHandler(OptionsFlowWithReload):
     """Handle a option flow for esphome."""
 
     async def async_step_init(
@@ -820,18 +1015,44 @@ class OptionsFlowHandler(OptionsFlow):
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
-        data_schema = vol.Schema(
-            {
+        options = self.config_entry.options
+        schema: dict[Any, Any] = {
+            vol.Required(
+                CONF_ALLOW_SERVICE_CALLS,
+                default=options.get(
+                    CONF_ALLOW_SERVICE_CALLS, DEFAULT_ALLOW_SERVICE_CALLS
+                ),
+            ): bool,
+            vol.Required(
+                CONF_SUBSCRIBE_LOGS,
+                default=options.get(CONF_SUBSCRIBE_LOGS, False),
+            ): bool,
+        }
+        if _entry_has_bluetooth_scanner(self.config_entry):
+            schema[
                 vol.Required(
-                    CONF_ALLOW_SERVICE_CALLS,
-                    default=self.config_entry.options.get(
-                        CONF_ALLOW_SERVICE_CALLS, DEFAULT_ALLOW_SERVICE_CALLS
+                    CONF_BLUETOOTH_SCANNING_MODE,
+                    default=options.get(
+                        CONF_BLUETOOTH_SCANNING_MODE, DEFAULT_BLUETOOTH_SCANNING_MODE
                     ),
-                ): bool,
-                vol.Required(
-                    CONF_SUBSCRIBE_LOGS,
-                    default=self.config_entry.options.get(CONF_SUBSCRIBE_LOGS, False),
-                ): bool,
-            }
+                )
+            ] = _BLUETOOTH_SCANNING_MODE_SELECTOR
+        return self.async_show_form(step_id="init", data_schema=vol.Schema(schema))
+
+
+@callback
+def _entry_has_bluetooth_scanner(entry: ESPHomeConfigEntry) -> bool:
+    """Return True if the entry exposes a bluetooth proxy scanner or has one saved."""
+    # Keep showing the option if it was previously saved, even when the
+    # device is offline or stops advertising the feature flag, so the
+    # saved value isn't silently dropped on the next options save.
+    if CONF_BLUETOOTH_SCANNING_MODE in entry.options:
+        return True
+    if entry.state is ConfigEntryState.LOADED and (
+        device_info := entry.runtime_data.device_info
+    ):
+        flags = device_info.bluetooth_proxy_feature_flags_compat(
+            entry.runtime_data.api_version
         )
-        return self.async_show_form(step_id="init", data_schema=data_schema)
+        return bool(flags & BluetoothProxyFeature.FEATURE_STATE_AND_MODE)
+    return False

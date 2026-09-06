@@ -1,9 +1,7 @@
 """Config flow for Mold indicator."""
 
-from __future__ import annotations
-
 from collections.abc import Mapping
-from typing import Any, cast
+from typing import Any, cast, override
 
 import voluptuous as vol
 
@@ -100,15 +98,18 @@ class MoldIndicatorConfigFlowHandler(SchemaConfigFlowHandler, domain=DOMAIN):
 
     config_flow = CONFIG_FLOW
     options_flow = OPTIONS_FLOW
+    options_flow_reloads = True
 
     VERSION = 1
     MINOR_VERSION = 2
 
+    @override
     def async_config_entry_title(self, options: Mapping[str, Any]) -> str:
         """Return config entry title."""
         return cast(str, options[CONF_NAME])
 
     @staticmethod
+    @override
     async def async_setup_preview(hass: HomeAssistant) -> None:
         """Set up preview WS API."""
         websocket_api.async_register_command(hass, ws_start_preview)
@@ -161,7 +162,6 @@ def ws_start_preview(
         )
 
     preview_entity = MoldIndicator(
-        hass,
         name,
         hass.config.units is METRIC_SYSTEM,
         indoor_temp,

@@ -13,7 +13,6 @@
     },
     "abort": {
       "already_in_progress": "[%key:common::config_flow::abort::already_in_progress%]",
-      "single_instance_allowed": "[%key:common::config_flow::abort::single_instance_allowed%]",
       "no_devices_found": "[%key:common::config_flow::abort::no_devices_found%]"
     }
   },
@@ -57,22 +56,30 @@
         "state_attributes": {
           "effect": {
             "state": {
+              "breathe": "Breathe",
+              "candlelight": "Candlelight",
+              "crossing": "Crossing",
+              "dating": "Dating",
+              "energetic": "Energetic",
+              "movie": "Movie",
               "none": "None",
+              "romantic": "Romantic",
+              "snowflake": "Snowflake",
               "sunrise": "Sunrise",
               "sunset": "Sunset",
-              "movie": "Movie",
-              "dating": "Dating",
-              "romantic": "Romantic",
-              "twinkle": "Twinkle",
-              "candlelight": "Candlelight",
-              "snowflake": "Snowflake",
-              "energetic": "Energetic",
-              "breathe": "Breathe",
-              "crossing": "Crossing"
+              "twinkle": "Twinkle"
             }
           }
         }
       }
+    }
+  },
+  "exceptions": {
+    "no_devices_found": {
+      "message": "[%key:common::config_flow::abort::no_devices_found%]"
+    },
+    "port_in_use": {
+      "message": "Port {port} is already in use"
     }
   }
 }

@@ -1,22 +1,13 @@
 """Constants for sensor."""
 
-from __future__ import annotations
-
 from enum import StrEnum
 from typing import Final
 
 import voluptuous as vol
 
 from homeassistant.const import (
-    CONCENTRATION_GRAMS_PER_CUBIC_METER,
-    CONCENTRATION_MICROGRAMS_PER_CUBIC_FOOT,
-    CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
-    CONCENTRATION_MILLIGRAMS_PER_CUBIC_METER,
-    CONCENTRATION_PARTS_PER_BILLION,
-    CONCENTRATION_PARTS_PER_MILLION,
     DEGREE,
     LIGHT_LUX,
-    PERCENTAGE,
     SIGNAL_STRENGTH_DECIBELS,
     SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
     UnitOfApparentPower,
@@ -24,6 +15,7 @@ from homeassistant.const import (
     UnitOfBloodGlucoseConcentration,
     UnitOfConductivity,
     UnitOfDataRate,
+    UnitOfDensity,
     UnitOfElectricCurrent,
     UnitOfElectricPotential,
     UnitOfEnergy,
@@ -36,6 +28,8 @@ from homeassistant.const import (
     UnitOfPower,
     UnitOfPrecipitationDepth,
     UnitOfPressure,
+    UnitOfRadiationConcentration,
+    UnitOfRatio,
     UnitOfReactiveEnergy,
     UnitOfReactivePower,
     UnitOfSoundPressure,
@@ -51,6 +45,7 @@ from homeassistant.util.unit_conversion import (
     AreaConverter,
     BaseUnitConverter,
     BloodGlucoseConcentrationConverter,
+    CarbonMonoxideConcentrationConverter,
     ConductivityConverter,
     DataRateConverter,
     DistanceConverter,
@@ -59,15 +54,22 @@ from homeassistant.util.unit_conversion import (
     ElectricPotentialConverter,
     EnergyConverter,
     EnergyDistanceConverter,
+    FrequencyConverter,
     InformationConverter,
     MassConverter,
     MassVolumeConcentrationConverter,
+    NitrogenDioxideConcentrationConverter,
+    NitrogenMonoxideConcentrationConverter,
+    OzoneConcentrationConverter,
     PowerConverter,
     PressureConverter,
+    RadiationConcentrationConverter,
     ReactiveEnergyConverter,
     ReactivePowerConverter,
     SpeedConverter,
+    SulphurDioxideConcentrationConverter,
     TemperatureConverter,
+    TemperatureDeltaConverter,
     UnitlessRatioConverter,
     VolumeConverter,
     VolumeFlowRateConverter,
@@ -80,6 +82,19 @@ CONF_STATE_CLASS: Final = "state_class"
 ATTR_LAST_RESET: Final = "last_reset"
 ATTR_STATE_CLASS: Final = "state_class"
 ATTR_OPTIONS: Final = "options"
+
+
+class SensorEntityCapabilityAttribute(StrEnum):
+    """Capability attributes for sensor entities."""
+
+    STATE_CLASS = "state_class"
+    OPTIONS = "options"
+
+
+class SensorEntityStateAttribute(StrEnum):
+    """State attributes for sensor entities."""
+
+    LAST_RESET = "last_reset"
 
 
 class SensorDeviceClass(StrEnum):
@@ -110,6 +125,20 @@ class SensorDeviceClass(StrEnum):
     ISO8601 format: https://en.wikipedia.org/wiki/ISO_8601
     """
 
+    UPTIME = "uptime"
+    """Uptime.
+
+    Represents the point in time when a device or service last restarted.
+
+    Small drift between updates is automatically suppressed in
+    `SensorEntity.state` to avoid unnecessary state changes caused by clock
+    jitter.
+
+    Unit of measurement: `None`
+
+    ISO8601 format: https://en.wikipedia.org/wiki/ISO_8601
+    """
+
     # Numerical device classes, these should be aligned with NumberDeviceClass
     ABSOLUTE_HUMIDITY = "absolute_humidity"
     """Absolute humidity.
@@ -120,7 +149,7 @@ class SensorDeviceClass(StrEnum):
     APPARENT_POWER = "apparent_power"
     """Apparent power.
 
-    Unit of measurement: `mVA`, `VA`
+    Unit of measurement: `mVA`, `VA`, `kVA`
     """
 
     AQI = "aqi"
@@ -156,7 +185,8 @@ class SensorDeviceClass(StrEnum):
     CO = "carbon_monoxide"
     """Carbon Monoxide gas concentration.
 
-    Unit of measurement: `ppm` (parts per million)
+    Unit of measurement: `ppb` (parts per billion),
+    `ppm` (parts per million), `mg/m³`, `μg/m³`
     """
 
     CO2 = "carbon_dioxide"
@@ -174,7 +204,7 @@ class SensorDeviceClass(StrEnum):
     CURRENT = "current"
     """Current.
 
-    Unit of measurement: `A`, `mA`
+    Unit of measurement: `A`, `mA`, `μA`
     """
 
     DATA_RATE = "data_rate"
@@ -208,16 +238,20 @@ class SensorDeviceClass(StrEnum):
 
     Use this device class for sensors measuring energy consumption, for example
     electric energy consumption.
-    Unit of measurement: `J`, `kJ`, `MJ`, `GJ`, `mWh`, `Wh`, `kWh`, `MWh`, `GWh`, `TWh`, `cal`, `kcal`, `Mcal`, `Gcal`
+    Unit of measurement: `J`, `kJ`, `MJ`, `GJ`, `mWh`,
+    `Wh`, `kWh`, `MWh`, `GWh`, `TWh`, `cal`, `kcal`,
+    `Mcal`, `Gcal`
     """
 
     ENERGY_DISTANCE = "energy_distance"
     """Energy distance.
 
-    Use this device class for sensors measuring energy by distance, for example the amount
-    of electric energy consumed by an electric car.
+    Use this device class for sensors measuring energy by
+    distance, for example the amount of electric energy
+    consumed by an electric car.
 
-    Unit of measurement: `kWh/100km`, `Wh/km`, `mi/kWh`, `km/kWh`
+    Unit of measurement: `kWh/100km`, `Wh/km`,
+    `mi/kWh`, `km/kWh`
     """
 
     ENERGY_STORAGE = "energy_storage"
@@ -226,13 +260,15 @@ class SensorDeviceClass(StrEnum):
     Use this device class for sensors measuring stored energy, for example the amount
     of electric energy currently stored in a battery or the capacity of a battery.
 
-    Unit of measurement: `J`, `kJ`, `MJ`, `GJ`, `mWh`, `Wh`, `kWh`, `MWh`, `GWh`, `TWh`, `cal`, `kcal`, `Mcal`, `Gcal`
+    Unit of measurement: `J`, `kJ`, `MJ`, `GJ`, `mWh`,
+    `Wh`, `kWh`, `MWh`, `GWh`, `TWh`, `cal`, `kcal`,
+    `Mcal`, `Gcal`
     """
 
     FREQUENCY = "frequency"
     """Frequency.
 
-    Unit of measurement: `Hz`, `kHz`, `MHz`, `GHz`
+    Unit of measurement: `mHz`, `Hz`, `kHz`, `MHz`, `GHz`
     """
 
     GAS = "gas"
@@ -240,7 +276,7 @@ class SensorDeviceClass(StrEnum):
 
     Unit of measurement:
     - SI / metric: `L`, `m³`
-    - USCS / imperial: `ft³`, `CCF`
+    - USCS / imperial: `ft³`, `CCF`, `MCF`
     """
 
     HUMIDITY = "humidity"
@@ -280,13 +316,13 @@ class SensorDeviceClass(StrEnum):
     NITROGEN_DIOXIDE = "nitrogen_dioxide"
     """Amount of NO2.
 
-    Unit of measurement: `μg/m³`
+    Unit of measurement: `ppb` (parts per billion), `ppm` (parts per million), `μg/m³`
     """
 
     NITROGEN_MONOXIDE = "nitrogen_monoxide"
     """Amount of NO.
 
-    Unit of measurement: `μg/m³`
+    Unit of measurement: `ppb` (parts per billion), `μg/m³`
     """
 
     NITROUS_OXIDE = "nitrous_oxide"
@@ -298,7 +334,7 @@ class SensorDeviceClass(StrEnum):
     OZONE = "ozone"
     """Amount of O3.
 
-    Unit of measurement: `μg/m³`
+    Unit of measurement: `ppb` (parts per billion), `ppm` (parts per million), `μg/m³`
     """
 
     PH = "ph"
@@ -321,6 +357,12 @@ class SensorDeviceClass(StrEnum):
 
     PM25 = "pm25"
     """Particulate matter <= 2.5 μm.
+
+    Unit of measurement: `μg/m³`
+    """
+
+    PM4 = "pm4"
+    """Particulate matter <= 4 μm.
 
     Unit of measurement: `μg/m³`
     """
@@ -358,9 +400,18 @@ class SensorDeviceClass(StrEnum):
 
     Unit of measurement:
     - `mbar`, `cbar`, `bar`
-    - `Pa`, `hPa`, `kPa`
+    - `mPa`, `Pa`, `hPa`, `kPa`
     - `inHg`
     - `psi`
+    - `inH₂O`
+    """
+
+    RADON = "radon"
+    """Radon.
+
+    Unit of measurement: UnitOfRadiationConcentration
+    - SI / metric: `Bq/m³`
+    - USCS / imperial: `pCi/L`
     """
 
     REACTIVE_ENERGY = "reactive_energy"
@@ -400,11 +451,17 @@ class SensorDeviceClass(StrEnum):
     SULPHUR_DIOXIDE = "sulphur_dioxide"
     """Amount of SO2.
 
-    Unit of measurement: `μg/m³`
+    Unit of measurement: `ppb` (parts per billion), `μg/m³`
     """
 
     TEMPERATURE = "temperature"
     """Temperature.
+
+    Unit of measurement: `°C`, `°F`, `K`
+    """
+
+    TEMPERATURE_DELTA = "temperature_delta"
+    """Difference of temperatures - Temperature range.
 
     Unit of measurement: `°C`, `°F`, `K`
     """
@@ -432,8 +489,10 @@ class SensorDeviceClass(StrEnum):
 
     Unit of measurement: `VOLUME_*` units
     - SI / metric: `mL`, `L`, `m³`
-    - USCS / imperial: `ft³`, `CCF`, `fl. oz.`, `gal` (warning: volumes expressed in
-    USCS/imperial units are currently assumed to be US volumes)
+    - USCS / imperial: `ft³`, `CCF`, `MCF`,
+    `fl. oz.`, `gal` (warning: volumes expressed in
+    USCS/imperial units are currently assumed to be
+    US volumes)
     """
 
     VOLUME_STORAGE = "volume_storage"
@@ -444,8 +503,10 @@ class SensorDeviceClass(StrEnum):
 
     Unit of measurement: `VOLUME_*` units
     - SI / metric: `mL`, `L`, `m³`
-    - USCS / imperial: `ft³`, `CCF`, `fl. oz.`, `gal` (warning: volumes expressed in
-    USCS/imperial units are currently assumed to be US volumes)
+    - USCS / imperial: `ft³`, `CCF`, `MCF`,
+    `fl. oz.`, `gal` (warning: volumes expressed in
+    USCS/imperial units are currently assumed to be
+    US volumes)
     """
 
     VOLUME_FLOW_RATE = "volume_flow_rate"
@@ -453,7 +514,7 @@ class SensorDeviceClass(StrEnum):
 
     Unit of measurement: UnitOfVolumeFlowRate
     - SI / metric: `m³/h`, `m³/min`, `m³/s`, `L/h`, `L/min`, `L/s`, `mL/s`
-    - USCS / imperial: `ft³/min`, `gal/min`
+    - USCS / imperial: `ft³/min`, `gal/min`, `gal/d`
     """
 
     WATER = "water"
@@ -461,7 +522,7 @@ class SensorDeviceClass(StrEnum):
 
     Unit of measurement:
     - SI / metric: `m³`, `L`
-    - USCS / imperial: `ft³`, `CCF`, `gal` (warning: volumes expressed in
+    - USCS / imperial: `ft³`, `CCF`, `MCF`, `gal` (warning: volumes expressed in
     USCS/imperial units are currently assumed to be US volumes)
     """
 
@@ -496,6 +557,7 @@ NON_NUMERIC_DEVICE_CLASSES = {
     SensorDeviceClass.DATE,
     SensorDeviceClass.ENUM,
     SensorDeviceClass.TIMESTAMP,
+    SensorDeviceClass.UPTIME,
 }
 
 DEVICE_CLASSES_SCHEMA: Final = vol.All(vol.Lower, vol.Coerce(SensorDeviceClass))
@@ -512,7 +574,10 @@ class SensorStateClass(StrEnum):
     """The state represents a measurement in present time."""
 
     MEASUREMENT_ANGLE = "measurement_angle"
-    """The state represents a angle measurement in present time. Currently only degrees are supported."""
+    """The state represents an angle measurement in present time.
+
+    Currently only degrees are supported.
+    """
 
     TOTAL = "total"
     """The state represents a total amount.
@@ -536,6 +601,7 @@ UNIT_CONVERTERS: dict[SensorDeviceClass | str | None, type[BaseUnitConverter]] =
     SensorDeviceClass.AREA: AreaConverter,
     SensorDeviceClass.ATMOSPHERIC_PRESSURE: PressureConverter,
     SensorDeviceClass.BLOOD_GLUCOSE_CONCENTRATION: BloodGlucoseConcentrationConverter,
+    SensorDeviceClass.CO: CarbonMonoxideConcentrationConverter,
     SensorDeviceClass.CONDUCTIVITY: ConductivityConverter,
     SensorDeviceClass.CURRENT: ElectricCurrentConverter,
     SensorDeviceClass.DATA_RATE: DataRateConverter,
@@ -545,16 +611,23 @@ UNIT_CONVERTERS: dict[SensorDeviceClass | str | None, type[BaseUnitConverter]] =
     SensorDeviceClass.ENERGY: EnergyConverter,
     SensorDeviceClass.ENERGY_DISTANCE: EnergyDistanceConverter,
     SensorDeviceClass.ENERGY_STORAGE: EnergyConverter,
+    SensorDeviceClass.FREQUENCY: FrequencyConverter,
     SensorDeviceClass.GAS: VolumeConverter,
+    SensorDeviceClass.NITROGEN_DIOXIDE: NitrogenDioxideConcentrationConverter,
+    SensorDeviceClass.NITROGEN_MONOXIDE: NitrogenMonoxideConcentrationConverter,
+    SensorDeviceClass.OZONE: OzoneConcentrationConverter,
     SensorDeviceClass.POWER: PowerConverter,
     SensorDeviceClass.POWER_FACTOR: UnitlessRatioConverter,
     SensorDeviceClass.PRECIPITATION: DistanceConverter,
     SensorDeviceClass.PRECIPITATION_INTENSITY: SpeedConverter,
     SensorDeviceClass.PRESSURE: PressureConverter,
+    SensorDeviceClass.RADON: RadiationConcentrationConverter,
     SensorDeviceClass.REACTIVE_ENERGY: ReactiveEnergyConverter,
     SensorDeviceClass.REACTIVE_POWER: ReactivePowerConverter,
+    SensorDeviceClass.SULPHUR_DIOXIDE: SulphurDioxideConcentrationConverter,
     SensorDeviceClass.SPEED: SpeedConverter,
     SensorDeviceClass.TEMPERATURE: TemperatureConverter,
+    SensorDeviceClass.TEMPERATURE_DELTA: TemperatureDeltaConverter,
     SensorDeviceClass.VOLATILE_ORGANIC_COMPOUNDS: MassVolumeConcentrationConverter,
     SensorDeviceClass.VOLATILE_ORGANIC_COMPOUNDS_PARTS: UnitlessRatioConverter,
     SensorDeviceClass.VOLTAGE: ElectricPotentialConverter,
@@ -568,17 +641,22 @@ UNIT_CONVERTERS: dict[SensorDeviceClass | str | None, type[BaseUnitConverter]] =
 
 DEVICE_CLASS_UNITS: dict[SensorDeviceClass, set[type[StrEnum] | str | None]] = {
     SensorDeviceClass.ABSOLUTE_HUMIDITY: {
-        CONCENTRATION_GRAMS_PER_CUBIC_METER,
-        CONCENTRATION_MILLIGRAMS_PER_CUBIC_METER,
+        UnitOfDensity.GRAMS_PER_CUBIC_METER,
+        UnitOfDensity.MILLIGRAMS_PER_CUBIC_METER,
     },
     SensorDeviceClass.APPARENT_POWER: set(UnitOfApparentPower),
     SensorDeviceClass.AQI: {None},
     SensorDeviceClass.AREA: set(UnitOfArea),
     SensorDeviceClass.ATMOSPHERIC_PRESSURE: set(UnitOfPressure),
-    SensorDeviceClass.BATTERY: {PERCENTAGE},
+    SensorDeviceClass.BATTERY: {UnitOfRatio.PERCENTAGE},
     SensorDeviceClass.BLOOD_GLUCOSE_CONCENTRATION: set(UnitOfBloodGlucoseConcentration),
-    SensorDeviceClass.CO: {CONCENTRATION_PARTS_PER_MILLION},
-    SensorDeviceClass.CO2: {CONCENTRATION_PARTS_PER_MILLION},
+    SensorDeviceClass.CO: {
+        UnitOfRatio.PARTS_PER_BILLION,
+        UnitOfRatio.PARTS_PER_MILLION,
+        UnitOfDensity.MILLIGRAMS_PER_CUBIC_METER,
+        UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
+    },
+    SensorDeviceClass.CO2: {UnitOfRatio.PARTS_PER_MILLION},
     SensorDeviceClass.CONDUCTIVITY: set(UnitOfConductivity),
     SensorDeviceClass.CURRENT: set(UnitOfElectricCurrent),
     SensorDeviceClass.DATA_RATE: set(UnitOfDataRate),
@@ -601,20 +679,33 @@ DEVICE_CLASS_UNITS: dict[SensorDeviceClass, set[type[StrEnum] | str | None]] = {
         UnitOfVolume.CUBIC_FEET,
         UnitOfVolume.CUBIC_METERS,
         UnitOfVolume.LITERS,
+        UnitOfVolume.MILLE_CUBIC_FEET,
     },
-    SensorDeviceClass.HUMIDITY: {PERCENTAGE},
+    SensorDeviceClass.HUMIDITY: {UnitOfRatio.PERCENTAGE},
     SensorDeviceClass.ILLUMINANCE: {LIGHT_LUX},
     SensorDeviceClass.IRRADIANCE: set(UnitOfIrradiance),
-    SensorDeviceClass.MOISTURE: {PERCENTAGE},
-    SensorDeviceClass.NITROGEN_DIOXIDE: {CONCENTRATION_MICROGRAMS_PER_CUBIC_METER},
-    SensorDeviceClass.NITROGEN_MONOXIDE: {CONCENTRATION_MICROGRAMS_PER_CUBIC_METER},
-    SensorDeviceClass.NITROUS_OXIDE: {CONCENTRATION_MICROGRAMS_PER_CUBIC_METER},
-    SensorDeviceClass.OZONE: {CONCENTRATION_MICROGRAMS_PER_CUBIC_METER},
+    SensorDeviceClass.MOISTURE: {UnitOfRatio.PERCENTAGE},
+    SensorDeviceClass.NITROGEN_DIOXIDE: {
+        UnitOfRatio.PARTS_PER_BILLION,
+        UnitOfRatio.PARTS_PER_MILLION,
+        UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
+    },
+    SensorDeviceClass.NITROGEN_MONOXIDE: {
+        UnitOfRatio.PARTS_PER_BILLION,
+        UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
+    },
+    SensorDeviceClass.NITROUS_OXIDE: {UnitOfDensity.MICROGRAMS_PER_CUBIC_METER},
+    SensorDeviceClass.OZONE: {
+        UnitOfRatio.PARTS_PER_BILLION,
+        UnitOfRatio.PARTS_PER_MILLION,
+        UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
+    },
     SensorDeviceClass.PH: {None},
-    SensorDeviceClass.PM1: {CONCENTRATION_MICROGRAMS_PER_CUBIC_METER},
-    SensorDeviceClass.PM10: {CONCENTRATION_MICROGRAMS_PER_CUBIC_METER},
-    SensorDeviceClass.PM25: {CONCENTRATION_MICROGRAMS_PER_CUBIC_METER},
-    SensorDeviceClass.POWER_FACTOR: {PERCENTAGE, None},
+    SensorDeviceClass.PM1: {UnitOfDensity.MICROGRAMS_PER_CUBIC_METER},
+    SensorDeviceClass.PM10: {UnitOfDensity.MICROGRAMS_PER_CUBIC_METER},
+    SensorDeviceClass.PM25: {UnitOfDensity.MICROGRAMS_PER_CUBIC_METER},
+    SensorDeviceClass.PM4: {UnitOfDensity.MICROGRAMS_PER_CUBIC_METER},
+    SensorDeviceClass.POWER_FACTOR: {UnitOfRatio.PERCENTAGE, None},
     SensorDeviceClass.POWER: {
         UnitOfPower.MILLIWATT,
         UnitOfPower.WATT,
@@ -626,6 +717,7 @@ DEVICE_CLASS_UNITS: dict[SensorDeviceClass, set[type[StrEnum] | str | None]] = {
     SensorDeviceClass.PRECIPITATION: set(UnitOfPrecipitationDepth),
     SensorDeviceClass.PRECIPITATION_INTENSITY: set(UnitOfVolumetricFlux),
     SensorDeviceClass.PRESSURE: set(UnitOfPressure),
+    SensorDeviceClass.RADON: set(UnitOfRadiationConcentration),
     SensorDeviceClass.REACTIVE_ENERGY: set(UnitOfReactiveEnergy),
     SensorDeviceClass.REACTIVE_POWER: set(UnitOfReactivePower),
     SensorDeviceClass.SIGNAL_STRENGTH: {
@@ -634,15 +726,19 @@ DEVICE_CLASS_UNITS: dict[SensorDeviceClass, set[type[StrEnum] | str | None]] = {
     },
     SensorDeviceClass.SOUND_PRESSURE: set(UnitOfSoundPressure),
     SensorDeviceClass.SPEED: {*UnitOfSpeed, *UnitOfVolumetricFlux},
-    SensorDeviceClass.SULPHUR_DIOXIDE: {CONCENTRATION_MICROGRAMS_PER_CUBIC_METER},
+    SensorDeviceClass.SULPHUR_DIOXIDE: {
+        UnitOfRatio.PARTS_PER_BILLION,
+        UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
+    },
     SensorDeviceClass.TEMPERATURE: set(UnitOfTemperature),
+    SensorDeviceClass.TEMPERATURE_DELTA: set(UnitOfTemperature),
     SensorDeviceClass.VOLATILE_ORGANIC_COMPOUNDS: {
-        CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
-        CONCENTRATION_MILLIGRAMS_PER_CUBIC_METER,
+        UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
+        UnitOfDensity.MILLIGRAMS_PER_CUBIC_METER,
     },
     SensorDeviceClass.VOLATILE_ORGANIC_COMPOUNDS_PARTS: {
-        CONCENTRATION_PARTS_PER_BILLION,
-        CONCENTRATION_PARTS_PER_MILLION,
+        UnitOfRatio.PARTS_PER_BILLION,
+        UnitOfRatio.PARTS_PER_MILLION,
     },
     SensorDeviceClass.VOLTAGE: set(UnitOfElectricPotential),
     SensorDeviceClass.VOLUME: set(UnitOfVolume),
@@ -654,6 +750,7 @@ DEVICE_CLASS_UNITS: dict[SensorDeviceClass, set[type[StrEnum] | str | None]] = {
         UnitOfVolume.CUBIC_METERS,
         UnitOfVolume.GALLONS,
         UnitOfVolume.LITERS,
+        UnitOfVolume.MILLE_CUBIC_FEET,
     },
     SensorDeviceClass.WEIGHT: set(UnitOfMass),
     SensorDeviceClass.WIND_DIRECTION: {DEGREE},
@@ -668,7 +765,7 @@ DEFAULT_PRECISION_LIMIT = 2
 # have 0 decimals, that one should be used and not mW, even though mW also should have
 # 0 decimals. Otherwise the smaller units will have more decimals than expected.
 UNITS_PRECISION = {
-    SensorDeviceClass.ABSOLUTE_HUMIDITY: (CONCENTRATION_GRAMS_PER_CUBIC_METER, 1),
+    SensorDeviceClass.ABSOLUTE_HUMIDITY: (UnitOfDensity.GRAMS_PER_CUBIC_METER, 1),
     SensorDeviceClass.APPARENT_POWER: (UnitOfApparentPower.VOLT_AMPERE, 0),
     SensorDeviceClass.AREA: (UnitOfArea.SQUARE_CENTIMETERS, 0),
     SensorDeviceClass.ATMOSPHERIC_PRESSURE: (UnitOfPressure.PA, 0),
@@ -695,10 +792,12 @@ UNITS_PRECISION = {
         0,
     ),
     SensorDeviceClass.PRESSURE: (UnitOfPressure.PA, 0),
+    SensorDeviceClass.RADON: (UnitOfRadiationConcentration.PICOCURIES_PER_LITER, 1),
     SensorDeviceClass.REACTIVE_POWER: (UnitOfReactivePower.VOLT_AMPERE_REACTIVE, 0),
     SensorDeviceClass.SOUND_PRESSURE: (UnitOfSoundPressure.DECIBEL, 0),
     SensorDeviceClass.SPEED: (UnitOfSpeed.MILLIMETERS_PER_SECOND, 0),
     SensorDeviceClass.TEMPERATURE: (UnitOfTemperature.KELVIN, 1),
+    SensorDeviceClass.TEMPERATURE_DELTA: (UnitOfTemperature.KELVIN, 1),
     SensorDeviceClass.VOLTAGE: (UnitOfElectricPotential.VOLT, 0),
     SensorDeviceClass.VOLUME: (UnitOfVolume.MILLILITERS, 0),
     SensorDeviceClass.VOLUME_FLOW_RATE: (UnitOfVolumeFlowRate.LITERS_PER_SECOND, 0),
@@ -747,11 +846,13 @@ DEVICE_CLASS_STATE_CLASSES: dict[SensorDeviceClass, set[SensorStateClass]] = {
     SensorDeviceClass.PM1: {SensorStateClass.MEASUREMENT},
     SensorDeviceClass.PM10: {SensorStateClass.MEASUREMENT},
     SensorDeviceClass.PM25: {SensorStateClass.MEASUREMENT},
+    SensorDeviceClass.PM4: {SensorStateClass.MEASUREMENT},
     SensorDeviceClass.POWER_FACTOR: {SensorStateClass.MEASUREMENT},
     SensorDeviceClass.POWER: {SensorStateClass.MEASUREMENT},
     SensorDeviceClass.PRECIPITATION: set(SensorStateClass),
     SensorDeviceClass.PRECIPITATION_INTENSITY: {SensorStateClass.MEASUREMENT},
     SensorDeviceClass.PRESSURE: {SensorStateClass.MEASUREMENT},
+    SensorDeviceClass.RADON: {SensorStateClass.MEASUREMENT},
     SensorDeviceClass.REACTIVE_ENERGY: {
         SensorStateClass.TOTAL,
         SensorStateClass.TOTAL_INCREASING,
@@ -762,7 +863,9 @@ DEVICE_CLASS_STATE_CLASSES: dict[SensorDeviceClass, set[SensorStateClass]] = {
     SensorDeviceClass.SPEED: {SensorStateClass.MEASUREMENT},
     SensorDeviceClass.SULPHUR_DIOXIDE: {SensorStateClass.MEASUREMENT},
     SensorDeviceClass.TEMPERATURE: {SensorStateClass.MEASUREMENT},
+    SensorDeviceClass.TEMPERATURE_DELTA: {SensorStateClass.MEASUREMENT},
     SensorDeviceClass.TIMESTAMP: set(),
+    SensorDeviceClass.UPTIME: set(),
     SensorDeviceClass.VOLATILE_ORGANIC_COMPOUNDS: {SensorStateClass.MEASUREMENT},
     SensorDeviceClass.VOLATILE_ORGANIC_COMPOUNDS_PARTS: {SensorStateClass.MEASUREMENT},
     SensorDeviceClass.VOLTAGE: {SensorStateClass.MEASUREMENT},
@@ -786,19 +889,25 @@ DEVICE_CLASS_STATE_CLASSES: dict[SensorDeviceClass, set[SensorStateClass]] = {
 }
 
 
-STATE_CLASS_UNITS: dict[SensorStateClass | str, set[type[StrEnum] | str | None]] = {
+STATE_CLASS_UNITS: dict[SensorStateClass, set[type[StrEnum] | str | None]] = {
     SensorStateClass.MEASUREMENT_ANGLE: {DEGREE},
 }
 
 # We translate units that were using using the legacy coding of μ \u00b5
-# to units using recommended coding of μ \u03bc
+# to units using recommended coding of μ \u03bc and
+# we convert alternative accepted units to the preferred unit.
 AMBIGUOUS_UNITS: dict[str | None, str] = {
     "\u00b5Sv/h": "μSv/h",  # aranet: radiation rate
     "\u00b5S/cm": UnitOfConductivity.MICROSIEMENS_PER_CM,
     "\u00b5V": UnitOfElectricPotential.MICROVOLT,
-    "\u00b5g/ft³": CONCENTRATION_MICROGRAMS_PER_CUBIC_FOOT,
-    "\u00b5g/m³": CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+    "\u00b5g/ft³": UnitOfDensity.MICROGRAMS_PER_CUBIC_FOOT,
+    "\u00b5g/m³": UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
     "\u00b5mol/s⋅m²": "μmol/s⋅m²",  # fyta: light
     "\u00b5g": UnitOfMass.MICROGRAMS,
     "\u00b5s": UnitOfTime.MICROSECONDS,
+    "mVAr": UnitOfReactivePower.MILLIVOLT_AMPERE_REACTIVE,
+    "VAr": UnitOfReactivePower.VOLT_AMPERE_REACTIVE,
+    "kVAr": UnitOfReactivePower.KILO_VOLT_AMPERE_REACTIVE,
+    "VArh": UnitOfReactiveEnergy.VOLT_AMPERE_REACTIVE_HOUR,
+    "kVArh": UnitOfReactiveEnergy.KILO_VOLT_AMPERE_REACTIVE_HOUR,
 }

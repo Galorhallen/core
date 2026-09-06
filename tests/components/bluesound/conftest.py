@@ -3,7 +3,7 @@
 from collections.abc import AsyncGenerator, Generator
 from dataclasses import dataclass
 import ipaddress
-from typing import Any
+from typing import Any, Self
 from unittest.mock import AsyncMock, patch
 
 from pyblu import Input, Player, Preset, Status, SyncStatus
@@ -27,8 +27,8 @@ class PlayerMockData:
     status_long_polling_mock: LongPollingMock[Status]
     sync_status_long_polling_mock: LongPollingMock[SyncStatus]
 
-    @staticmethod
-    async def generate(host: str) -> "PlayerMockData":
+    @classmethod
+    async def generate(cls, host: str) -> Self:
         """Generate player mock data."""
         host_ip = ipaddress.ip_address(host)
         assert host_ip.version == 4
@@ -98,6 +98,9 @@ class PlayerMockData:
             return_value=[
                 Input("1", "input1", "image1", "url1"),
                 Input("2", "input2", "image2", "url2"),
+                Input(None, "input3", "image3", "url3"),
+                Input("4", None, "image4", "url4"),
+                Input(None, None, "image5", "url5"),
             ]
         )
         player.presets = AsyncMock(
@@ -107,7 +110,7 @@ class PlayerMockData:
             ]
         )
 
-        return PlayerMockData(
+        return cls(
             host, player, status_long_polling_mock, sync_status_long_polling_mock
         )
 
@@ -157,6 +160,23 @@ def config_entry_secondary() -> MockConfigEntry:
 
 
 @pytest.fixture
+def config_entry_non_default_port() -> MockConfigEntry:
+    """Return a mocked config entry for a non-default-port player.
+
+    Shares its mac (via player_mocks) with the leader `config_entry` at the
+    default port.
+    """
+    return MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_HOST: "1.1.1.2",
+            CONF_PORT: 11001,
+        },
+        unique_id="ff:ff:01:01:01:01-11001",
+    )
+
+
+@pytest.fixture
 async def setup_config_entry(
     hass: HomeAssistant, config_entry: MockConfigEntry, player_mocks: PlayerMocks
 ) -> None:
@@ -188,7 +208,10 @@ async def player_mocks() -> AsyncGenerator[PlayerMocks]:
     )
 
     # to simulate a player that is already configured
-    player_mocks.player_data_for_already_configured.sync_status_long_polling_mock.get().mac = player_mocks.player_data.sync_status_long_polling_mock.get().mac
+    already_configured = player_mocks.player_data_for_already_configured
+    already_configured.sync_status_long_polling_mock.get().mac = (
+        player_mocks.player_data.sync_status_long_polling_mock.get().mac
+    )
 
     def select_player(*args: Any, **kwargs: Any) -> AsyncMock:
         match args[0]:

@@ -1,7 +1,5 @@
 """The Stookwijzer integration."""
 
-from __future__ import annotations
-
 from typing import Any
 
 from stookwijzer import Stookwijzer
@@ -17,7 +15,7 @@ from homeassistant.helpers.typing import ConfigType
 
 from .const import DOMAIN, LOGGER
 from .coordinator import StookwijzerConfigEntry, StookwijzerCoordinator
-from .services import setup_services
+from .services import async_setup_services
 
 PLATFORMS = [Platform.SENSOR]
 
@@ -26,7 +24,7 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the Stookwijzer component."""
-    setup_services(hass)
+    async_setup_services(hass)
     return True
 
 

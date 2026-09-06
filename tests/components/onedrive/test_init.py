@@ -2,8 +2,9 @@
 
 from copy import copy
 from html import escape
+from http import HTTPStatus
 from json import dumps
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from onedrive_personal_sdk.const import DriveState
 from onedrive_personal_sdk.exceptions import (
@@ -11,7 +12,7 @@ from onedrive_personal_sdk.exceptions import (
     NotFoundError,
     OneDriveException,
 )
-from onedrive_personal_sdk.models.items import AppRoot, Drive, File, Folder, ItemUpdate
+from onedrive_personal_sdk.models.items import AppRoot, Drive, File, Folder
 import pytest
 from syrupy.assertion import SnapshotAssertion
 
@@ -19,15 +20,20 @@ from homeassistant.components.onedrive.const import (
     CONF_FOLDER_ID,
     CONF_FOLDER_NAME,
     DOMAIN,
+    OAUTH2_TOKEN,
 )
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, issue_registry as ir
+from homeassistant.helpers.config_entry_oauth2_flow import (
+    ImplementationUnavailableError,
+)
 
 from . import setup_integration
-from .const import BACKUP_METADATA, INSTANCE_ID
+from .const import BACKUP_METADATA
 
 from tests.common import MockConfigEntry
+from tests.test_util.aiohttp import AiohttpClientMocker
 
 
 async def test_load_unload_config_entry(
@@ -53,6 +59,54 @@ async def test_load_unload_config_entry(
     await hass.async_block_till_done()
 
     assert mock_config_entry.state is ConfigEntryState.NOT_LOADED
+
+
+@pytest.mark.parametrize(
+    ("status", "state", "reason", "reauth_expected"),
+    [
+        pytest.param(
+            HTTPStatus.BAD_REQUEST,
+            ConfigEntryState.SETUP_ERROR,
+            "Authentication failed",
+            True,
+            id="reauth",
+        ),
+        pytest.param(
+            HTTPStatus.TOO_MANY_REQUESTS,
+            ConfigEntryState.SETUP_RETRY,
+            "Failed to connect to OneDrive",
+            False,
+            id="transient",
+        ),
+        pytest.param(
+            HTTPStatus.INTERNAL_SERVER_ERROR,
+            ConfigEntryState.SETUP_RETRY,
+            "Failed to connect to OneDrive",
+            False,
+            id="server_error",
+        ),
+    ],
+)
+@pytest.mark.parametrize("expires_at", [0], ids=["expired"])
+async def test_token_refresh_errors(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    aioclient_mock: AiohttpClientMocker,
+    status: HTTPStatus,
+    state: ConfigEntryState,
+    reason: str,
+    reauth_expected: bool,
+) -> None:
+    """Test a failing token refresh during setup."""
+    aioclient_mock.post(OAUTH2_TOKEN, status=status, json={})
+    mock_config_entry.add_to_hass(hass)
+
+    assert not await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert mock_config_entry.state is state
+    assert mock_config_entry.reason == reason
+    assert bool(hass.config_entries.flow.async_progress()) is reauth_expected
 
 
 @pytest.mark.parametrize(
@@ -125,38 +179,27 @@ async def test_get_integration_folder_creation_error(
     assert "Failed to get backups_123 folder" in caplog.text
 
 
-async def test_update_instance_id_description(
-    hass: HomeAssistant,
-    mock_config_entry: MockConfigEntry,
-    mock_onedrive_client: MagicMock,
-    mock_folder: Folder,
-) -> None:
-    """Test we write the instance id to the folder."""
-    mock_folder.description = ""
-    await setup_integration(hass, mock_config_entry)
-    await hass.async_block_till_done()
-
-    mock_onedrive_client.update_drive_item.assert_called_with(
-        mock_folder.id, ItemUpdate(description=INSTANCE_ID)
-    )
-
-
 async def test_migrate_metadata_files(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     mock_onedrive_client: MagicMock,
     mock_backup_file: File,
 ) -> None:
-    """Test migration of metadata files."""
+    """Test migration of metadata files from v1 to v2.
+
+    V1 stored metadata in the backup file's description field.
+    V2 stores metadata in a separate .metadata.json file.
+    """
     mock_backup_file.description = escape(
         dumps({**BACKUP_METADATA, "metadata_version": 1})
     )
     await setup_integration(hass, mock_config_entry)
     await hass.async_block_till_done()
 
+    # Should upload a new metadata file
     mock_onedrive_client.upload_file.assert_called_once()
-    assert mock_onedrive_client.update_drive_item.call_count == 2
-    assert mock_onedrive_client.update_drive_item.call_args[1]["data"].description == ""
+    # No longer updates descriptions (we don't rely on them anymore)
+    assert mock_onedrive_client.update_drive_item.call_count == 0
 
 
 async def test_migrate_metadata_files_errors(
@@ -194,7 +237,9 @@ async def test_device(
 
     await setup_integration(hass, mock_config_entry)
 
-    device = device_registry.async_get_device({(DOMAIN, mock_drive.id)})
+    device = device_registry.async_get_device_by_identifier(
+        (DOMAIN, mock_drive.id), mock_config_entry.entry_id
+    )
     assert device
     assert device == snapshot
 
@@ -216,6 +261,7 @@ async def test_device(
 )
 async def test_data_cap_issues(
     hass: HomeAssistant,
+    issue_registry: ir.IssueRegistry,
     mock_config_entry: MockConfigEntry,
     mock_onedrive_client: MagicMock,
     mock_drive: Drive,
@@ -229,7 +275,6 @@ async def test_data_cap_issues(
 
     await setup_integration(hass, mock_config_entry)
 
-    issue_registry = ir.async_get(hass)
     issue = issue_registry.async_get_issue(DOMAIN, issue_key)
     assert (issue is not None) == issue_exists
 
@@ -298,3 +343,20 @@ async def test_migration_guard_against_major_downgrade(
 
     await setup_integration(hass, old_config_entry)
     assert old_config_entry.state is ConfigEntryState.MIGRATION_ERROR
+
+
+async def test_oauth_implementation_not_available(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """Test that unavailable OAuth implementation raises ConfigEntryNotReady."""
+    mock_config_entry.add_to_hass(hass)
+
+    with patch(
+        "homeassistant.components.onedrive.async_get_config_entry_implementation",
+        side_effect=ImplementationUnavailableError,
+    ):
+        await hass.config_entries.async_setup(mock_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert mock_config_entry.state is ConfigEntryState.SETUP_RETRY

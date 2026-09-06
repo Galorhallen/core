@@ -3,17 +3,14 @@
     "reload": {
       "service": "mdi:reload"
     },
+    "stop": {
+      "service": "mdi:stop"
+    },
     "write_coil": {
       "service": "mdi:pencil"
     },
     "write_register": {
       "service": "mdi:database-edit"
-    },
-    "stop": {
-      "service": "mdi:stop"
-    },
-    "restart": {
-      "service": "mdi:restart"
     }
   }
 }

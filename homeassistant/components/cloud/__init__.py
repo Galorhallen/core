@@ -1,15 +1,21 @@
 """Component to integrate the Home Assistant cloud."""
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from datetime import datetime, timedelta
 from enum import Enum
 import logging
-from typing import cast
+from typing import Any, cast
 
-from hass_nabucasa import Cloud
+from hass_nabucasa import (
+    Cloud,
+    CloudEvent,
+    CloudEventType,
+    LoginFailedEvent,
+    NabuCasaBaseError,
+    RemoteNotConnected,
+)
 import voluptuous as vol
 
 from homeassistant.components import alexa, google_assistant
@@ -35,7 +41,7 @@ from homeassistant.helpers.dispatcher import (
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.service import async_register_admin_service
 from homeassistant.helpers.typing import ConfigType
-from homeassistant.loader import async_get_integration, bind_hass
+from homeassistant.loader import async_get_integration
 from homeassistant.util.signal_type import SignalType
 
 # Pre-import backup to avoid it being imported
@@ -46,15 +52,16 @@ from . import (
     backup,  # noqa: F401
     http_api,
 )
+from .assist_pipeline import async_create_cloud_pipeline
 from .client import CloudClient
 from .const import (
     CONF_ACCOUNT_LINK_SERVER,
-    CONF_ACCOUNTS_SERVER,
     CONF_ACME_SERVER,
     CONF_ALEXA,
     CONF_ALIASES,
-    CONF_CLOUDHOOK_SERVER,
+    CONF_API_SERVER,
     CONF_COGNITO_CLIENT_ID,
+    CONF_DISCOVERY_SERVICE_ACTIONS,
     CONF_ENTITY_CONFIG,
     CONF_FILTER,
     CONF_GOOGLE_ACTIONS,
@@ -64,25 +71,41 @@ from .const import (
     CONF_USER_POOL_ID,
     DATA_CLOUD,
     DATA_CLOUD_LOG_HANDLER,
+    DATA_PENDING_AUTO_LOGIN,
     DATA_PLATFORMS_SETUP,
     DOMAIN,
+    EVENT_CLOUD_EVENT,
     MODE_DEV,
     MODE_PROD,
 )
 from .helpers import FixedSizeQueueLogHandler
+from .models import auto_login_failure_key
 from .prefs import CloudPreferences
 from .repairs import async_manage_legacy_subscription_issue
 from .subscription import async_subscription_info
 
 DEFAULT_MODE = MODE_PROD
 
-PLATFORMS = [Platform.BINARY_SENSOR, Platform.STT, Platform.TTS]
+PLATFORMS = [
+    Platform.BINARY_SENSOR,
+    Platform.STT,
+    Platform.TTS,
+]
+
+LLM_PLATFORMS = [
+    Platform.AI_TASK,
+    Platform.CONVERSATION,
+]
 
 SERVICE_REMOTE_CONNECT = "remote_connect"
 SERVICE_REMOTE_DISCONNECT = "remote_disconnect"
 
 SIGNAL_CLOUD_CONNECTION_STATE: SignalType[CloudConnectionState] = SignalType(
     "CLOUD_CONNECTION_STATE"
+)
+
+_SIGNAL_CLOUDHOOKS_UPDATED: SignalType[dict[str, Any]] = SignalType(
+    "CLOUDHOOKS_UPDATED"
 )
 
 STARTUP_REPAIR_DELAY = 1  # 1 hour
@@ -115,26 +138,37 @@ GACTIONS_SCHEMA = ASSISTANT_SCHEMA.extend(
     {vol.Optional(CONF_ENTITY_CONFIG): {cv.entity_id: GOOGLE_ENTITY_SCHEMA}}
 )
 
+_BASE_CONFIG_SCHEMA = vol.Schema(
+    {
+        vol.Optional(CONF_COGNITO_CLIENT_ID): str,
+        vol.Optional(CONF_USER_POOL_ID): str,
+        vol.Optional(CONF_REGION): str,
+        vol.Optional(CONF_ALEXA): ALEXA_SCHEMA,
+        vol.Optional(CONF_GOOGLE_ACTIONS): GACTIONS_SCHEMA,
+        vol.Optional(CONF_ACCOUNT_LINK_SERVER): str,
+        vol.Optional(CONF_ACME_SERVER): str,
+        vol.Optional(CONF_API_SERVER): str,
+        vol.Optional(CONF_RELAYER_SERVER): str,
+        vol.Optional(CONF_REMOTESTATE_SERVER): str,
+        vol.Optional(CONF_SERVICEHANDLERS_SERVER): str,
+    }
+)
+
 CONFIG_SCHEMA = vol.Schema(
     {
-        DOMAIN: vol.Schema(
-            {
-                vol.Optional(CONF_MODE, default=DEFAULT_MODE): vol.In(
-                    [MODE_DEV, MODE_PROD]
-                ),
-                vol.Optional(CONF_COGNITO_CLIENT_ID): str,
-                vol.Optional(CONF_USER_POOL_ID): str,
-                vol.Optional(CONF_REGION): str,
-                vol.Optional(CONF_ALEXA): ALEXA_SCHEMA,
-                vol.Optional(CONF_GOOGLE_ACTIONS): GACTIONS_SCHEMA,
-                vol.Optional(CONF_ACCOUNT_LINK_SERVER): str,
-                vol.Optional(CONF_ACCOUNTS_SERVER): str,
-                vol.Optional(CONF_ACME_SERVER): str,
-                vol.Optional(CONF_CLOUDHOOK_SERVER): str,
-                vol.Optional(CONF_RELAYER_SERVER): str,
-                vol.Optional(CONF_REMOTESTATE_SERVER): str,
-                vol.Optional(CONF_SERVICEHANDLERS_SERVER): str,
-            }
+        DOMAIN: vol.Any(
+            _BASE_CONFIG_SCHEMA.extend(
+                {
+                    vol.Required(CONF_MODE): vol.In([MODE_DEV]),
+                    vol.Required(CONF_API_SERVER): str,
+                    vol.Optional(CONF_DISCOVERY_SERVICE_ACTIONS): {str: cv.url},
+                }
+            ),
+            _BASE_CONFIG_SCHEMA.extend(
+                {
+                    vol.Optional(CONF_MODE, default=DEFAULT_MODE): vol.In([MODE_PROD]),
+                }
+            ),
         )
     },
     extra=vol.ALLOW_EXTRA,
@@ -156,7 +190,6 @@ class CloudConnectionState(Enum):
     CLOUD_DISCONNECTED = "cloud_disconnected"
 
 
-@bind_hass
 @callback
 def async_is_logged_in(hass: HomeAssistant) -> bool:
     """Test if user is logged in.
@@ -166,7 +199,6 @@ def async_is_logged_in(hass: HomeAssistant) -> bool:
     return DATA_CLOUD in hass.data and hass.data[DATA_CLOUD].is_logged_in
 
 
-@bind_hass
 @callback
 def async_is_connected(hass: HomeAssistant) -> bool:
     """Test if connected to the cloud."""
@@ -182,7 +214,6 @@ def async_listen_connection_change(
     return async_dispatcher_connect(hass, SIGNAL_CLOUD_CONNECTION_STATE, target)
 
 
-@bind_hass
 @callback
 def async_active_subscription(hass: HomeAssistant) -> bool:
     """Test if user has an active subscription."""
@@ -205,7 +236,6 @@ async def async_get_or_create_cloudhook(hass: HomeAssistant, webhook_id: str) ->
     return await async_create_cloudhook(hass, webhook_id)
 
 
-@bind_hass
 async def async_create_cloudhook(hass: HomeAssistant, webhook_id: str) -> str:
     """Create a cloudhook."""
     if not async_is_connected(hass):
@@ -220,7 +250,6 @@ async def async_create_cloudhook(hass: HomeAssistant, webhook_id: str) -> str:
     return cloudhook_url
 
 
-@bind_hass
 async def async_delete_cloudhook(hass: HomeAssistant, webhook_id: str) -> None:
     """Delete a cloudhook."""
     if DATA_CLOUD not in hass.data:
@@ -229,7 +258,27 @@ async def async_delete_cloudhook(hass: HomeAssistant, webhook_id: str) -> None:
     await hass.data[DATA_CLOUD].cloudhooks.async_delete(webhook_id)
 
 
-@bind_hass
+@callback
+def async_listen_cloudhook_change(
+    hass: HomeAssistant,
+    webhook_id: str,
+    on_change: Callable[[dict[str, Any] | None], None],
+) -> Callable[[], None]:
+    """Listen for cloudhook changes for the given webhook.
+
+    Notify when modified or deleted.
+    """
+
+    @callback
+    def _handle_cloudhooks_updated(cloudhooks: dict[str, Any]) -> None:
+        """Handle cloudhooks updated signal."""
+        on_change(cloudhooks.get(webhook_id))
+
+    return async_dispatcher_connect(
+        hass, _SIGNAL_CLOUDHOOKS_UPDATED, _handle_cloudhooks_updated
+    )
+
+
 @callback
 def async_remote_ui_url(hass: HomeAssistant) -> str:
     """Get the remote UI URL."""
@@ -276,7 +325,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _shutdown)
 
-    _remote_handle_prefs_updated(cloud)
+    _handle_prefs_updated(hass, cloud)
     _setup_services(hass, prefs)
 
     async def async_startup_repairs(_: datetime) -> None:
@@ -326,12 +375,60 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         """Update preferences."""
         await prefs.async_update(remote_domain=cloud.remote.instance_domain)
 
+    hass.data[DATA_PENDING_AUTO_LOGIN] = None
+
+    async def _on_cloud_login(event: CloudEvent) -> None:
+        """Handle a successful login, interactive or auto-login alike."""
+        # Never cancel the controller here, hass_nabucasa cancels the retry loop
+        # itself and this may be running inside that very loop.
+        hass.data[DATA_PENDING_AUTO_LOGIN] = None
+        if "assist_pipeline" in hass.config.components:
+            await async_create_cloud_pipeline(hass)
+        async_dispatcher_send(hass, EVENT_CLOUD_EVENT, {"type": "login"})
+
+    def _on_cloud_login_failed(event: CloudEvent) -> None:
+        """Handle hass_nabucasa giving up on a pending auto-login."""
+        # The event bus types every handler against the CloudEvent base class.
+        if not isinstance(event, LoginFailedEvent) or not event.auto:
+            return
+
+        async_dispatcher_send(
+            hass,
+            EVENT_CLOUD_EVENT,
+            {
+                "type": "auto_login_failed",
+                "translation_key": auto_login_failure_key(event.reason),
+            },
+        )
+
+    async def _on_cloud_logout(event: CloudEvent) -> None:
+        """Clean up after a logout."""
+        nonlocal loaded
+
+        # Forget a pending auto-login, hass_nabucasa cancels it on logout.
+        # No frontend event here, hass_nabucasa publishes LOGOUT before it clears
+        # the tokens, so a client re-reading the status would still see a session.
+        hass.data[DATA_PENDING_AUTO_LOGIN] = None
+        # Allow _on_start to create a new config entry on the next login.
+        loaded = False
+        await _async_remove_config_entry(hass)
+
     cloud.register_on_start(_on_start)
     cloud.iot.register_on_connect(_on_connect)
     cloud.iot.register_on_disconnect(_on_disconnect)
     cloud.register_on_initialized(_on_initialized)
+    cloud.events.subscribe(event_type=CloudEventType.LOGIN, handler=_on_cloud_login)
+    cloud.events.subscribe(
+        event_type=CloudEventType.LOGIN_FAILED, handler=_on_cloud_login_failed
+    )
+    cloud.events.subscribe(event_type=CloudEventType.LOGOUT, handler=_on_cloud_logout)
 
     await cloud.initialize()
+
+    if not cloud.is_logged_in:
+        # Remove leftover config entries if the user is not logged in.
+        await _async_remove_config_entry(hass)
+
     http_api.async_setup(hass)
 
     account_link.async_setup(hass)
@@ -359,32 +456,55 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 
+async def _async_remove_config_entry(hass: HomeAssistant) -> None:
+    """Remove the config entry, it's recreated when a user logs in again."""
+    if entries := hass.config_entries.async_entries(DOMAIN):
+        # The manifest sets single_config_entry, so there is at most one entry.
+        await hass.config_entries.async_remove(entries[0].entry_id)
+
+
 @callback
-def _remote_handle_prefs_updated(cloud: Cloud[CloudClient]) -> None:
-    """Handle remote preferences updated."""
-    cur_pref = cloud.client.prefs.remote_enabled
+def _handle_prefs_updated(hass: HomeAssistant, cloud: Cloud[CloudClient]) -> None:
+    """Register handler for cloud preferences updates."""
+    cur_remote_enabled = cloud.client.prefs.remote_enabled
+    cur_cloudhooks = cloud.client.prefs.cloudhooks
     lock = asyncio.Lock()
 
-    # Sync remote connection with prefs
-    async def remote_prefs_updated(prefs: CloudPreferences) -> None:
-        """Update remote status."""
-        nonlocal cur_pref
+    async def on_prefs_updated(prefs: CloudPreferences) -> None:
+        """Handle cloud preferences updates."""
+        nonlocal cur_remote_enabled
+        nonlocal cur_cloudhooks
 
+        # Lock protects cur_ state variables from concurrent updates
         async with lock:
-            if prefs.remote_enabled == cur_pref:
+            if cur_cloudhooks != prefs.cloudhooks:
+                cur_cloudhooks = prefs.cloudhooks
+                async_dispatcher_send(hass, _SIGNAL_CLOUDHOOKS_UPDATED, cur_cloudhooks)
+
+            if prefs.remote_enabled == cur_remote_enabled:
                 return
 
-            if cur_pref := prefs.remote_enabled:
+            if cur_remote_enabled := prefs.remote_enabled:
                 await cloud.remote.connect()
             else:
-                await cloud.remote.disconnect()
+                # Prefs are reset when a new user logs in, before the remote
+                # backend exists.
+                with suppress(RemoteNotConnected):
+                    await cloud.remote.disconnect()
 
-    cloud.client.prefs.async_listen_updates(remote_prefs_updated)
+    cloud.client.prefs.async_listen_updates(on_prefs_updated)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up a config entry."""
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    platforms = PLATFORMS.copy()
+    if (cloud := hass.data[DATA_CLOUD]).is_logged_in:
+        with suppress(NabuCasaBaseError):
+            await cloud.llm.async_ensure_token()
+            platforms += LLM_PLATFORMS
+
+    await hass.config_entries.async_forward_entry_setups(entry, platforms)
+    entry.runtime_data = {"platforms": platforms}
     stt_tts_entities_added = hass.data[DATA_PLATFORMS_SETUP]["stt_tts_entities_added"]
     stt_tts_entities_added.set()
 
@@ -393,7 +513,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    return await hass.config_entries.async_unload_platforms(
+        entry, entry.runtime_data["platforms"]
+    )
 
 
 @callback

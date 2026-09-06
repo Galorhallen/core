@@ -1,9 +1,8 @@
 """AI Task integration for OpenRouter."""
 
-from __future__ import annotations
-
 from json import JSONDecodeError
 import logging
+from typing import override
 
 from homeassistant.components import ai_task, conversation
 from homeassistant.core import HomeAssistant
@@ -40,8 +39,12 @@ class OpenRouterAITaskEntity(
     """OpenRouter AI Task entity."""
 
     _attr_name = None
-    _attr_supported_features = ai_task.AITaskEntityFeature.GENERATE_DATA
+    _attr_supported_features = (
+        ai_task.AITaskEntityFeature.GENERATE_DATA
+        | ai_task.AITaskEntityFeature.SUPPORT_ATTACHMENTS
+    )
 
+    @override
     async def _async_generate_data(
         self,
         task: ai_task.GenDataTask,

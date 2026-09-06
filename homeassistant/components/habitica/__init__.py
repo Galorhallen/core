@@ -1,17 +1,24 @@
 """The habitica integration."""
 
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from habiticalib import Habitica
+from yarl import URL
 
+from homeassistant.components.notify import DOMAIN as NOTIFY_DOMAIN
 from homeassistant.const import CONF_API_KEY, CONF_URL, CONF_VERIFY_SSL, Platform
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import config_validation as cv, device_registry as dr
+from homeassistant.helpers import (
+    config_validation as cv,
+    device_registry as dr,
+    entity_registry as er,
+)
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.util.hass_dict import HassKey
 
-from .const import CONF_API_USER, DOMAIN, X_CLIENT
+from .const import CONF_API_USER, DOMAIN, MANUFACTURER, NAME, X_CLIENT
 from .coordinator import (
     HabiticaConfigEntry,
     HabiticaDataUpdateCoordinator,
@@ -27,6 +34,7 @@ PLATFORMS = [
     Platform.BUTTON,
     Platform.CALENDAR,
     Platform.IMAGE,
+    Platform.NOTIFY,
     Platform.SENSOR,
     Platform.SWITCH,
     Platform.TODO,
@@ -46,6 +54,7 @@ async def async_setup_entry(
     """Set up habitica from a config entry."""
     party_added_by_this_entry: UUID | None = None
     device_reg = dr.async_get(hass)
+    entity_registry = er.async_get(hass)
 
     session = async_get_clientsession(
         hass, verify_ssl=config_entry.data.get(CONF_VERIFY_SSL, True)
@@ -64,9 +73,25 @@ async def async_setup_entry(
 
     config_entry.runtime_data = coordinator
 
+    if TYPE_CHECKING:
+        assert config_entry.unique_id
+
+    # Register the user device so children (party device) can resolve it
+    # deterministically as their via_device parent before platforms are set up.
+    device_reg.async_get_or_create(
+        config_entry_id=config_entry.entry_id,
+        entry_type=dr.DeviceEntryType.SERVICE,
+        manufacturer=MANUFACTURER,
+        model=NAME,
+        name=coordinator.data.user.profile.name,
+        configuration_url=(
+            URL(config_entry.data[CONF_URL]) / "profile" / config_entry.unique_id
+        ),
+        identifiers={(DOMAIN, config_entry.unique_id)},
+    )
+
     party = coordinator.data.user.party.id
-    if HABITICA_KEY not in hass.data:
-        hass.data[HABITICA_KEY] = {}
+    hass.data.setdefault(HABITICA_KEY, {})
 
     if party is not None and party not in hass.data[HABITICA_KEY]:
         party_coordinator = HabiticaPartyCoordinator(hass, config_entry, api)
@@ -74,6 +99,23 @@ async def async_setup_entry(
 
         hass.data[HABITICA_KEY][party] = party_coordinator
         party_added_by_this_entry = party
+
+    if party is not None:
+        # Register the party device so party member devices can resolve it
+        # deterministically as their via_device parent.
+        device_reg.async_get_or_create(
+            config_entry_id=config_entry.entry_id,
+            entry_type=dr.DeviceEntryType.SERVICE,
+            manufacturer=MANUFACTURER,
+            model=NAME,
+            name=hass.data[HABITICA_KEY][party].data.party.summary,
+            identifiers={(DOMAIN, f"{config_entry.unique_id}_{party!s}")},
+            via_device_id=dr.async_get_device_id_by_identifier(
+                hass,
+                (DOMAIN, config_entry.unique_id),
+                config_entry_id=config_entry.entry_id,
+            ),
+        )
 
     @callback
     def _party_update_listener() -> None:
@@ -90,18 +132,38 @@ async def async_setup_entry(
                 )
                 party_added_by_this_entry = None
             if party:
-                identifier = {(DOMAIN, f"{config_entry.unique_id}_{party!s}")}
-                if device := device_reg.async_get_device(identifiers=identifier):
-                    device_reg.async_update_device(
-                        device.id, remove_config_entry_id=config_entry.entry_id
-                    )
+                identifier = (DOMAIN, f"{config_entry.unique_id}_{party!s}")
+                if device := device_reg.async_get_device_by_identifier(
+                    identifier, config_entry.entry_id
+                ):
+                    device_reg.async_remove_device(device.id)
+
+                notify_entities = [
+                    entry.entity_id
+                    for entry in entity_registry.entities.values()
+                    if entry.domain == NOTIFY_DOMAIN
+                    and entry.config_entry_id == config_entry.entry_id
+                ]
+                for entity_id in notify_entities:
+                    entity_registry.async_remove(entity_id)
 
             hass.config_entries.async_schedule_reload(config_entry.entry_id)
 
     coordinator.async_add_listener(_party_update_listener)
 
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
+
+    config_entry.async_on_unload(
+        config_entry.add_update_listener(_async_update_listener)
+    )
     return True
+
+
+async def _async_update_listener(
+    hass: HomeAssistant, entry: HabiticaConfigEntry
+) -> None:
+    """Handle update."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def shutdown_party_coordinator(hass: HomeAssistant, party_added: UUID) -> None:

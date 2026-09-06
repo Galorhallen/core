@@ -11,11 +11,16 @@ from homeassistant.config_entries import SOURCE_BLUETOOTH, SOURCE_USER
 from homeassistant.const import CONF_ADDRESS, CONF_CLIENT_ID, CONF_PIN
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers.service_info.bluetooth import BluetoothServiceInfo
 
 from . import (
     AUTOMOWER_MISSING_MANUFACTURER_DATA_SERVICE_INFO,
-    AUTOMOWER_SERVICE_INFO,
+    AUTOMOWER_NOT_PAIRABLE_SERVICE_INFO,
+    AUTOMOWER_SERVICE_INFO_MOWER,
+    AUTOMOWER_SERVICE_INFO_SERIAL,
     AUTOMOWER_UNNAMED_SERVICE_INFO,
+    MISSING_SERVICE_SERVICE_INFO,
+    WATER_TIMER_SERVICE_INFO,
 )
 
 from tests.common import MockConfigEntry
@@ -44,6 +49,22 @@ async def test_user_selection(hass: HomeAssistant) -> None:
     )
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "user"
+
+    # mock connection error
+    with patch(
+        "homeassistant.components.husqvarna_automower_ble.config_flow.HusqvarnaAutomowerBleConfigFlow.probe_mower",
+        return_value=None,
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                CONF_ADDRESS: "00000000-0000-0000-0000-000000000001",
+                CONF_PIN: "1234",
+            },
+        )
+        assert result["type"] is FlowResultType.FORM
+        assert result["step_id"] == "user"
+        assert result["errors"] == {"base": "cannot_connect"}
 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
@@ -121,10 +142,16 @@ async def test_user_selection_incorrect_pin(
     }
 
 
-async def test_bluetooth(hass: HomeAssistant) -> None:
+@pytest.mark.parametrize(
+    "service_info",
+    [AUTOMOWER_SERVICE_INFO_MOWER, AUTOMOWER_SERVICE_INFO_SERIAL],
+)
+async def test_bluetooth(
+    hass: HomeAssistant, service_info: BluetoothServiceInfo
+) -> None:
     """Test bluetooth device discovery."""
 
-    inject_bluetooth_service_info(hass, AUTOMOWER_SERVICE_INFO)
+    inject_bluetooth_service_info(hass, service_info)
     await hass.async_block_till_done(wait_background_tasks=True)
 
     result = hass.config_entries.flow.async_progress_by_handler(DOMAIN)[0]
@@ -152,14 +179,10 @@ async def test_bluetooth_incorrect_pin(
 ) -> None:
     """Test we can select a device."""
 
+    inject_bluetooth_service_info(hass, AUTOMOWER_SERVICE_INFO_SERIAL)
     await hass.async_block_till_done(wait_background_tasks=True)
 
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": SOURCE_BLUETOOTH},
-        data=AUTOMOWER_SERVICE_INFO,
-    )
-    assert result["type"] is FlowResultType.FORM
+    result = hass.config_entries.flow.async_progress_by_handler(DOMAIN)[0]
     assert result["step_id"] == "bluetooth_confirm"
 
     # Try non numeric pin
@@ -209,14 +232,10 @@ async def test_bluetooth_unknown_error(
 ) -> None:
     """Test we can select a device."""
 
+    inject_bluetooth_service_info(hass, AUTOMOWER_SERVICE_INFO_SERIAL)
     await hass.async_block_till_done(wait_background_tasks=True)
 
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": SOURCE_BLUETOOTH},
-        data=AUTOMOWER_SERVICE_INFO,
-    )
-    assert result["type"] is FlowResultType.FORM
+    result = hass.config_entries.flow.async_progress_by_handler(DOMAIN)[0]
     assert result["step_id"] == "bluetooth_confirm"
 
     mock_automower_client.connect.return_value = ResponseResult.UNKNOWN_ERROR
@@ -236,14 +255,10 @@ async def test_bluetooth_not_paired(
 ) -> None:
     """Test we can select a device."""
 
+    inject_bluetooth_service_info(hass, AUTOMOWER_SERVICE_INFO_SERIAL)
     await hass.async_block_till_done(wait_background_tasks=True)
 
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": SOURCE_BLUETOOTH},
-        data=AUTOMOWER_SERVICE_INFO,
-    )
-    assert result["type"] is FlowResultType.FORM
+    result = hass.config_entries.flow.async_progress_by_handler(DOMAIN)[0]
     assert result["step_id"] == "bluetooth_confirm"
 
     mock_automower_client.connect.return_value = ResponseResult.NOT_ALLOWED
@@ -274,18 +289,64 @@ async def test_bluetooth_not_paired(
     }
 
 
-async def test_bluetooth_invalid(hass: HomeAssistant) -> None:
+async def test_bluetooth_not_pairable_logs_on_connect(
+    hass: HomeAssistant,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test not-pairable warning is logged only when connection is attempted."""
+
+    inject_bluetooth_service_info(hass, AUTOMOWER_NOT_PAIRABLE_SERVICE_INFO)
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    result = hass.config_entries.flow.async_progress_by_handler(DOMAIN)[0]
+    assert result["step_id"] == "bluetooth_confirm"
+
+    # The warning must not be emitted just from showing the form
+    assert "does not appear to be pairable" not in caplog.text
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={CONF_PIN: "1234"},
+    )
+
+    # Now that the user submitted a valid PIN and a connection is attempted,
+    # the warning should appear exactly once
+    assert (
+        sum(
+            "does not appear to be pairable" in record.getMessage()
+            for record in caplog.records
+        )
+        == 1
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["result"].unique_id == "00000000-0000-0000-0000-000000000005"
+    assert result["data"] == {
+        CONF_ADDRESS: "00000000-0000-0000-0000-000000000005",
+        CONF_CLIENT_ID: 1197489078,
+        CONF_PIN: "1234",
+    }
+
+
+@pytest.mark.parametrize(
+    "service_info",
+    [
+        AUTOMOWER_MISSING_MANUFACTURER_DATA_SERVICE_INFO,
+        MISSING_SERVICE_SERVICE_INFO,
+        WATER_TIMER_SERVICE_INFO,
+    ],
+)
+async def test_bluetooth_invalid(
+    hass: HomeAssistant, service_info: BluetoothServiceInfo
+) -> None:
     """Test bluetooth device discovery with invalid data."""
 
-    inject_bluetooth_service_info(
-        hass, AUTOMOWER_MISSING_MANUFACTURER_DATA_SERVICE_INFO
-    )
+    inject_bluetooth_service_info(hass, service_info)
     await hass.async_block_till_done(wait_background_tasks=True)
 
     result = await hass.config_entries.flow.async_init(
         DOMAIN,
         context={"source": SOURCE_BLUETOOTH},
-        data=AUTOMOWER_MISSING_MANUFACTURER_DATA_SERVICE_INFO,
+        data=service_info,
     )
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "no_devices_found"
@@ -365,6 +426,30 @@ async def test_successful_reauth(
     )
     assert mock_config_entry.data[CONF_CLIENT_ID] == 1197489078
     assert mock_config_entry.data[CONF_PIN] == "1234"
+
+
+async def test_user_device_not_found(hass: HomeAssistant) -> None:
+    """Test we handle the device not being found gracefully."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_USER}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "user"
+
+    with patch(
+        "homeassistant.components.husqvarna_automower_ble.config_flow.bluetooth.async_ble_device_from_address",
+        return_value=None,
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                CONF_ADDRESS: "00000000-0000-0000-0000-000000000001",
+                CONF_PIN: "1234",
+            },
+        )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "user"
+    assert result["errors"] == {"base": "cannot_connect"}
 
 
 async def test_user_unable_to_connect(
@@ -470,9 +555,8 @@ async def test_exception_probe(
         result["flow_id"],
         user_input={CONF_PIN: "1234"},
     )
-
-    assert result["type"] is FlowResultType.ABORT
-    assert result["reason"] == "cannot_connect"
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "cannot_connect"}
 
 
 async def test_exception_connect(

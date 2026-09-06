@@ -1,10 +1,8 @@
 """Time-based One Time Password auth module."""
 
-from __future__ import annotations
-
 import asyncio
 from io import BytesIO
-from typing import Any, cast
+from typing import Any, cast, override
 
 import voluptuous as vol
 
@@ -20,7 +18,7 @@ from . import (
     SetupFlow,
 )
 
-REQUIREMENTS = ["pyotp==2.8.0", "PyQRCode==1.2.1"]
+REQUIREMENTS = ["pyotp==2.9.0", "PyQRCode==1.2.1"]
 
 CONFIG_SCHEMA = MULTI_FACTOR_AUTH_MODULE_SCHEMA.extend({}, extra=vol.PREVENT_EXTRA)
 
@@ -33,6 +31,9 @@ STORAGE_OTA_SECRET = "ota_secret"
 INPUT_FIELD_CODE = "code"
 
 DUMMY_SECRET = "FPPTH34D4E3MI2HG"
+
+GOOGLE_AUTHENTICATOR_URL = "https://support.google.com/accounts/answer/1066447"
+AUTHY_URL = "https://authy.com/"
 
 
 def _generate_qr_code(data: str) -> str:
@@ -86,6 +87,7 @@ class TotpAuthModule(MultiFactorAuthModule):
         self._init_lock = asyncio.Lock()
 
     @property
+    @override
     def input_schema(self) -> vol.Schema:
         """Validate login flow input data."""
         return vol.Schema({vol.Required(INPUT_FIELD_CODE): str})
@@ -114,6 +116,7 @@ class TotpAuthModule(MultiFactorAuthModule):
         self._users[user_id] = ota_secret  # type: ignore[index]
         return ota_secret
 
+    @override
     async def async_setup_flow(self, user_id: str) -> TotpSetupFlow:
         """Return a data entry flow handler for setup module.
 
@@ -123,6 +126,7 @@ class TotpAuthModule(MultiFactorAuthModule):
         assert user is not None
         return TotpSetupFlow(self, self.input_schema, user)
 
+    @override
     async def async_setup_user(self, user_id: str, setup_data: Any) -> str:
         """Set up auth module for user."""
         if self._users is None:
@@ -135,6 +139,7 @@ class TotpAuthModule(MultiFactorAuthModule):
         await self._async_save()
         return result
 
+    @override
     async def async_depose_user(self, user_id: str) -> None:
         """Depose auth module for user."""
         if self._users is None:
@@ -143,6 +148,7 @@ class TotpAuthModule(MultiFactorAuthModule):
         if self._users.pop(user_id, None):  # type: ignore[union-attr]
             await self._async_save()
 
+    @override
     async def async_is_user_setup(self, user_id: str) -> bool:
         """Return whether user is setup."""
         if self._users is None:
@@ -150,6 +156,7 @@ class TotpAuthModule(MultiFactorAuthModule):
 
         return user_id in self._users  # type: ignore[operator]
 
+    @override
     async def async_validate(self, user_id: str, user_input: dict[str, Any]) -> bool:
         """Return True if validation passed."""
         if self._users is None:
@@ -188,6 +195,7 @@ class TotpSetupFlow(SetupFlow[TotpAuthModule]):
         super().__init__(auth_module, setup_schema, user.id)
         self._user = user
 
+    @override
     async def async_step_init(
         self, user_input: dict[str, str] | None = None
     ) -> FlowResult:
@@ -229,6 +237,8 @@ class TotpSetupFlow(SetupFlow[TotpAuthModule]):
                 "code": self._ota_secret,
                 "url": self._url,
                 "qr_code": self._image,
+                "google_authenticator_url": GOOGLE_AUTHENTICATOR_URL,
+                "authy_url": AUTHY_URL,
             },
             errors=errors,
         )

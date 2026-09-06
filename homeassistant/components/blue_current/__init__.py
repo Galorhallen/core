@@ -1,7 +1,5 @@
 """The Blue Current integration."""
 
-from __future__ import annotations
-
 import asyncio
 from contextlib import suppress
 from typing import Any
@@ -18,7 +16,9 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_API_TOKEN, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.typing import ConfigType
 
 from .const import (
     CHARGEPOINT_SETTINGS,
@@ -29,17 +29,28 @@ from .const import (
     PLUG_AND_CHARGE,
     VALUE,
 )
+from .services import async_setup_services
 
 type BlueCurrentConfigEntry = ConfigEntry[Connector]
 
 PLATFORMS = [Platform.BUTTON, Platform.SENSOR, Platform.SWITCH]
 CHARGE_POINTS = "CHARGE_POINTS"
+CHARGE_CARDS = "CHARGE_CARDS"
 DATA = "data"
 DELAY = 5
 
 GRID = "GRID"
 OBJECT = "object"
 VALUE_TYPES = [CHARGEPOINT_STATUS, CHARGEPOINT_SETTINGS]
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Set up Blue Current."""
+
+    async_setup_services(hass)
+    return True
 
 
 async def async_setup_entry(
@@ -87,6 +98,7 @@ class Connector:
         self.client = client
         self.charge_points: dict[str, dict] = {}
         self.grid: dict[str, Any] = {}
+        self.charge_cards: dict[str, dict[str, Any]] = {}
 
     async def on_data(self, message: dict) -> None:
         """Handle received data."""
@@ -135,7 +147,8 @@ class Connector:
         """Update the charge point data."""
         charge_point = self.charge_points[evse_id]
         if update_type == CHARGEPOINT_SETTINGS:
-            # Update the plug and charge object. The library parses this object to a bool instead of an object.
+            # Update the plug and charge object. The library
+            # parses this object to a bool instead of an object.
             plug_and_charge = charge_point.get(PLUG_AND_CHARGE)
             if plug_and_charge is not None:
                 plug_and_charge[VALUE] = data[PLUG_AND_CHARGE]
@@ -167,7 +180,8 @@ class Connector:
                     await self.client.connect(self.on_data, self.on_open)
                 except RequestLimitReached:
                     LOGGER.warning(
-                        "Request limit reached. reconnecting at 00:00 (Europe/Amsterdam)"
+                        "Request limit reached. reconnecting at"
+                        " 00:00 (Europe/Amsterdam)"
                     )
                     delay = self.client.get_next_reset_delta().seconds
                 except WebsocketError:

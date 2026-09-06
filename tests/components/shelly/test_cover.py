@@ -1,8 +1,9 @@
 """Tests for Shelly cover platform."""
 
 from copy import deepcopy
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
+from freezegun.api import FrozenDateTimeFactory
 import pytest
 
 from homeassistant.components.cover import (
@@ -21,13 +22,32 @@ from homeassistant.components.cover import (
     SERVICE_STOP_COVER_TILT,
     CoverState,
 )
-from homeassistant.const import ATTR_ENTITY_ID
+from homeassistant.components.shelly.const import RPC_COVER_UPDATE_TIME_SEC
+from homeassistant.const import (
+    ATTR_ASSUMED_STATE,
+    ATTR_ENTITY_ID,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+    Platform,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_registry import EntityRegistry
 
-from . import init_integration, mutate_rpc_device_status
+from . import (
+    init_integration,
+    mock_polling_rpc_update,
+    mutate_rpc_device_status,
+    patch_platforms,
+)
 
 ROLLER_BLOCK_ID = 1
+
+
+@pytest.fixture(autouse=True)
+def fixture_platforms():
+    """Limit platforms under test."""
+    with patch_platforms([Platform.COVER]):
+        yield
 
 
 async def test_block_device_services(
@@ -97,6 +117,83 @@ async def test_block_device_update(
     state = hass.states.get("cover.test_name")
     assert state
     assert state.state == CoverState.OPEN
+    assert ATTR_ASSUMED_STATE not in state.attributes
+
+
+@pytest.mark.parametrize(
+    ("last_direction", "expected_state"),
+    [
+        ("close", CoverState.CLOSED),
+        ("open", CoverState.OPEN),
+        # Nothing has moved since the device booted
+        (None, STATE_UNKNOWN),
+    ],
+)
+async def test_block_device_roller_without_positioning(
+    hass: HomeAssistant,
+    mock_block_device: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    last_direction: str | None,
+    expected_state: str,
+) -> None:
+    """Test an uncalibrated roller reports the direction it last travelled in."""
+    settings = deepcopy(mock_block_device.settings)
+    settings["rollers"][0]["positioning"] = False
+    monkeypatch.setattr(mock_block_device, "settings", settings)
+
+    status = deepcopy(mock_block_device.status)
+    # An uncalibrated roller parks its position on 101
+    status["rollers"] = [{"current_pos": 101, "last_direction": last_direction}]
+    monkeypatch.setattr(mock_block_device, "status", status)
+
+    await init_integration(hass, 1)
+
+    assert (state := hass.states.get("cover.test_name"))
+    assert state.state == expected_state
+    assert state.attributes.get(ATTR_CURRENT_POSITION) is None
+    # Stopping mid travel leaves the direction saying more than it knows, so
+    # both buttons stay available
+    assert state.attributes[ATTR_ASSUMED_STATE] is True
+
+
+async def test_block_device_roller_without_positioning_stopped(
+    hass: HomeAssistant,
+    mock_block_device: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test stopping an uncalibrated roller keeps it on its last direction."""
+    settings = deepcopy(mock_block_device.settings)
+    settings["rollers"][0]["positioning"] = False
+    monkeypatch.setattr(mock_block_device, "settings", settings)
+
+    status = deepcopy(mock_block_device.status)
+    status["rollers"] = [{"current_pos": 101, "last_direction": "close"}]
+    monkeypatch.setattr(mock_block_device, "status", status)
+
+    # An uncalibrated roller answers a command with position 101 as well
+    monkeypatch.setattr(
+        mock_block_device.blocks[ROLLER_BLOCK_ID],
+        "set_state",
+        AsyncMock(
+            side_effect=lambda go, roller_pos=0: {"current_pos": 101, "state": go}
+        ),
+    )
+
+    await init_integration(hass, 1)
+
+    entity_id = "cover.test_name"
+    assert (state := hass.states.get(entity_id))
+    assert state.state == CoverState.CLOSED
+
+    await hass.services.async_call(
+        COVER_DOMAIN,
+        SERVICE_STOP_COVER,
+        {ATTR_ENTITY_ID: entity_id},
+        blocking=True,
+    )
+
+    assert (state := hass.states.get(entity_id))
+    assert state.state == CoverState.CLOSED
 
 
 async def test_block_device_no_roller_blocks(
@@ -125,6 +222,8 @@ async def test_rpc_device_services(
         {ATTR_ENTITY_ID: entity_id, ATTR_POSITION: 50},
         blocking=True,
     )
+
+    mock_rpc_device.cover_set_position.assert_called_once_with(0, pos=50)
     assert (state := hass.states.get(entity_id))
     assert state.attributes[ATTR_CURRENT_POSITION] == 50
 
@@ -139,6 +238,7 @@ async def test_rpc_device_services(
     )
     mock_rpc_device.mock_update()
 
+    mock_rpc_device.cover_open.assert_called_once_with(0)
     assert (state := hass.states.get(entity_id))
     assert state.state == CoverState.OPENING
 
@@ -153,6 +253,7 @@ async def test_rpc_device_services(
     )
     mock_rpc_device.mock_update()
 
+    mock_rpc_device.cover_close.assert_called_once_with(0)
     assert (state := hass.states.get(entity_id))
     assert state.state == CoverState.CLOSING
 
@@ -164,6 +265,8 @@ async def test_rpc_device_services(
         blocking=True,
     )
     mock_rpc_device.mock_update()
+
+    mock_rpc_device.cover_stop.assert_called_once_with(0)
     assert (state := hass.states.get(entity_id))
     assert state.state == CoverState.CLOSED
 
@@ -248,9 +351,11 @@ async def test_rpc_cover_tilt(
     mutate_rpc_device_status(monkeypatch, mock_rpc_device, "cover:0", "slat_pos", 50)
     mock_rpc_device.mock_update()
 
+    mock_rpc_device.cover_set_position.assert_called_once_with(0, slat_pos=50)
     assert (state := hass.states.get(entity_id))
     assert state.attributes[ATTR_CURRENT_TILT_POSITION] == 50
 
+    mock_rpc_device.cover_set_position.reset_mock()
     await hass.services.async_call(
         COVER_DOMAIN,
         SERVICE_OPEN_COVER_TILT,
@@ -260,9 +365,11 @@ async def test_rpc_cover_tilt(
     mutate_rpc_device_status(monkeypatch, mock_rpc_device, "cover:0", "slat_pos", 100)
     mock_rpc_device.mock_update()
 
+    mock_rpc_device.cover_set_position.assert_called_once_with(0, slat_pos=100)
     assert (state := hass.states.get(entity_id))
     assert state.attributes[ATTR_CURRENT_TILT_POSITION] == 100
 
+    mock_rpc_device.cover_set_position.reset_mock()
     await hass.services.async_call(
         COVER_DOMAIN,
         SERVICE_CLOSE_COVER_TILT,
@@ -278,5 +385,79 @@ async def test_rpc_cover_tilt(
     mutate_rpc_device_status(monkeypatch, mock_rpc_device, "cover:0", "slat_pos", 10)
     mock_rpc_device.mock_update()
 
+    mock_rpc_device.cover_stop.assert_called_once_with(0)
     assert (state := hass.states.get(entity_id))
     assert state.attributes[ATTR_CURRENT_TILT_POSITION] == 10
+
+
+async def test_rpc_cover_position_update(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_rpc_device: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test RPC update_position while the cover is moving."""
+    entity_id = "cover.test_name_test_cover_0"
+    await init_integration(hass, 2)
+
+    # Set initial state to closing, position 50 set by update_cover_status mock
+    mutate_rpc_device_status(
+        monkeypatch, mock_rpc_device, "cover:0", "state", "closing"
+    )
+    mock_rpc_device.mock_update()
+
+    assert (state := hass.states.get(entity_id))
+    assert state.state == CoverState.CLOSING
+    assert state.attributes[ATTR_CURRENT_POSITION] == 50
+
+    # Simulate position updates during closing
+    for position in range(40, -1, -10):
+        mock_rpc_device.update_cover_status.reset_mock()
+        await mock_polling_rpc_update(hass, freezer, RPC_COVER_UPDATE_TIME_SEC)
+
+        mock_rpc_device.update_cover_status.assert_called_once_with(0)
+        assert (state := hass.states.get(entity_id))
+        assert state.attributes[ATTR_CURRENT_POSITION] == position
+        assert state.state == CoverState.CLOSING
+
+    # Simulate cover reaching final position
+    mock_rpc_device.update_cover_status.reset_mock()
+    mutate_rpc_device_status(monkeypatch, mock_rpc_device, "cover:0", "state", "closed")
+    mock_rpc_device.mock_update()
+
+    assert (state := hass.states.get(entity_id))
+    assert state.attributes[ATTR_CURRENT_POSITION] == 0
+    assert state.state == CoverState.CLOSED
+
+    # Ensure update_position does not call update_cover_status
+    # when the cover is not moving
+    await mock_polling_rpc_update(hass, freezer, RPC_COVER_UPDATE_TIME_SEC)
+    mock_rpc_device.update_cover_status.assert_not_called()
+
+
+async def test_rpc_not_initialized_update(
+    hass: HomeAssistant,
+    mock_rpc_device: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """Test update not called when device is not initialized."""
+    entity_id = "cover.test_name_test_cover_0"
+    await init_integration(hass, 2)
+
+    # Set initial state to closing
+    mutate_rpc_device_status(
+        monkeypatch, mock_rpc_device, "cover:0", "state", "closing"
+    )
+    mutate_rpc_device_status(monkeypatch, mock_rpc_device, "cover:0", "current_pos", 40)
+
+    # mock device not initialized (e.g. disconnected)
+    monkeypatch.setattr(mock_rpc_device, "initialized", False)
+    mock_rpc_device.mock_update()
+
+    # wait for update interval to allow update_position to call update_cover_status
+    await mock_polling_rpc_update(hass, freezer, RPC_COVER_UPDATE_TIME_SEC)
+
+    mock_rpc_device.update_cover_status.assert_not_called()
+    assert (state := hass.states.get(entity_id))
+    assert state.state == STATE_UNAVAILABLE

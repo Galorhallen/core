@@ -2,8 +2,9 @@
 
 from datetime import timedelta
 import logging
+from typing import override
 
-from aiopvpc import BadApiTokenAuthError, EsiosApiData, PVPCData
+from esios_api import BadApiTokenAuthError, EsiosApiData, PVPCData
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_API_TOKEN
@@ -29,13 +30,16 @@ class ElecPricesDataUpdateCoordinator(DataUpdateCoordinator[EsiosApiData]):
         self, hass: HomeAssistant, entry: PVPCConfigEntry, sensor_keys: set[str]
     ) -> None:
         """Initialize."""
+        config = entry.data.copy()
+        config.update({attr: value for attr, value in entry.options.items() if value})
+
         self.api = PVPCData(
             session=async_get_clientsession(hass),
-            tariff=entry.data[ATTR_TARIFF],
+            tariff=config[ATTR_TARIFF],
             local_timezone=hass.config.time_zone,
-            power=entry.data[ATTR_POWER],
-            power_valley=entry.data[ATTR_POWER_P3],
-            api_token=entry.data.get(CONF_API_TOKEN),
+            power=config[ATTR_POWER],
+            power_valley=config[ATTR_POWER_P3],
+            api_token=config.get(CONF_API_TOKEN),
             sensor_keys=tuple(sensor_keys),
         )
         super().__init__(
@@ -51,6 +55,7 @@ class ElecPricesDataUpdateCoordinator(DataUpdateCoordinator[EsiosApiData]):
         """Return entry ID."""
         return self.config_entry.entry_id
 
+    @override
     async def _async_update_data(self) -> EsiosApiData:
         """Update electricity prices from the ESIOS API."""
         try:

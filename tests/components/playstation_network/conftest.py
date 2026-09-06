@@ -103,7 +103,10 @@ def mock_psnawpapi(mock_user: MagicMock) -> Generator[MagicMock]:
         client.me.return_value.get_account_devices.return_value = [
             {"deviceType": "PSVITA"},
             {
-                "deviceId": "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234",
+                "deviceId": (
+                    "1234567890abcdef1234567890abcdef"
+                    "1234567890abcdef1234567890abcdef1234"
+                ),
                 "deviceType": "PS5",
                 "activationType": "PRIMARY",
                 "activationDate": "2021-01-14T18:00:00.000Z",
@@ -184,7 +187,10 @@ def mock_psnawpapi(mock_user: MagicMock) -> Generator[MagicMock]:
         fren = MagicMock(
             spec=User, account_id="fren-psn-id", online_id="PublicUniversalFriend"
         )
-
+        fren.get_presence.return_value = mock_user.get_presence.return_value
+        fren.trophy_summary.return_value = TrophySummary(
+            "fren-psn-id", 420, 20, 5, TrophySet(4782, 1245, 437, 96)
+        )
         client.user.return_value.friends_list.return_value = [fren]
 
         yield client

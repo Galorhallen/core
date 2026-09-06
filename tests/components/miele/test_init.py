@@ -3,9 +3,9 @@
 from datetime import timedelta
 import http
 import time
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, Mock, patch
 
-from aiohttp import ClientConnectionError
+from aiohttp import ClientConnectionError, ClientResponseError
 from freezegun.api import FrozenDateTimeFactory
 from pymiele import OAUTH2_TOKEN
 import pytest
@@ -14,7 +14,7 @@ from syrupy.assertion import SnapshotAssertion
 from homeassistant.components.miele.const import DOMAIN
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import config_entry_oauth2_flow, device_registry as dr
 from homeassistant.setup import async_setup_component
 
 from . import setup_integration
@@ -109,7 +109,7 @@ async def test_devices_multiple_created_count(
     """Test that multiple devices are created."""
     await setup_integration(hass, mock_config_entry)
 
-    assert len(device_registry.devices) == 5
+    assert len(device_registry.devices) == 8
 
 
 async def test_device_info(
@@ -121,8 +121,8 @@ async def test_device_info(
 ) -> None:
     """Test device registry integration."""
     await setup_integration(hass, mock_config_entry)
-    device_entry = device_registry.async_get_device(
-        identifiers={(DOMAIN, "Dummy_Appliance_1")}
+    device_entry = device_registry.async_get_device_by_identifier(
+        (DOMAIN, "Dummy_Appliance_1"), mock_config_entry.entry_id
     )
     assert device_entry is not None
     assert device_entry == snapshot
@@ -143,25 +143,19 @@ async def test_device_remove_devices(
     assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    device_entry = device_registry.async_get_device(
-        identifiers={
-            (
-                DOMAIN,
-                "Dummy_Appliance_1",
-            )
-        },
+    device_entry = device_registry.async_get_device_by_identifier(
+        (DOMAIN, "Dummy_Appliance_1"),
+        mock_config_entry.entry_id,
     )
     client = await hass_ws_client(hass)
-    response = await client.remove_device(device_entry.id, mock_config_entry.entry_id)
+    response = await client.remove_device(device_entry.id)
     assert not response["success"]
 
     old_device_entry = device_registry.async_get_or_create(
         config_entry_id=mock_config_entry.entry_id,
         identifiers={(DOMAIN, "OLD-DEVICE-UUID")},
     )
-    response = await client.remove_device(
-        old_device_entry.id, mock_config_entry.entry_id
-    )
+    response = await client.remove_device(old_device_entry.id)
     assert response["success"]
 
 
@@ -205,8 +199,50 @@ async def test_setup_all_platforms(
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
 
-    assert len(device_registry.devices) == prev_devices + 2
+    assert len(device_registry.devices) == prev_devices + 1
 
     # Check a sample sensor for each new device
     assert hass.states.get("sensor.dishwasher").state == "in_use"
     assert hass.states.get("sensor.oven_temperature_2").state == "175.0"
+
+
+@pytest.mark.parametrize(
+    "side_effect",
+    [
+        ClientResponseError(Mock(), Mock()),
+        TimeoutError,
+    ],
+    ids=[
+        "ClientResponseError",
+        "TimeoutError",
+    ],
+)
+async def test_load_entry_with_action_error(
+    hass: HomeAssistant,
+    mock_miele_client: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    side_effect: Exception,
+) -> None:
+    """Test load with error from actions endpoint."""
+    mock_miele_client.get_actions.side_effect = side_effect
+    await setup_integration(hass, mock_config_entry)
+    entry = mock_config_entry
+
+    assert entry.state is ConfigEntryState.LOADED
+    assert mock_miele_client.get_actions.call_count == 5
+
+
+async def test_oauth_implementation_not_available(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """Test that an unavailable OAuth implementation raises ConfigEntryNotReady."""
+    assert await async_setup_component(hass, "cloud", {})
+
+    with patch(
+        "homeassistant.components.miele.async_get_config_entry_implementation",
+        side_effect=config_entry_oauth2_flow.ImplementationUnavailableError,
+    ):
+        await hass.config_entries.async_setup(mock_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert mock_config_entry.state is ConfigEntryState.SETUP_RETRY

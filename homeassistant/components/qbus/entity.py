@@ -1,17 +1,16 @@
 """Base class for Qbus entities."""
 
-from __future__ import annotations
-
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 import re
-from typing import Generic, TypeVar, cast
+from typing import TYPE_CHECKING, cast, override
 
 from qbusmqttapi.discovery import QbusMqttDevice, QbusMqttOutput
 from qbusmqttapi.factory import QbusMqttMessageFactory, QbusMqttTopicFactory
 from qbusmqttapi.state import QbusMqttState
 
 from homeassistant.components.mqtt import ReceiveMessage, client as mqtt
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo, format_mac
 from homeassistant.helpers.entity import Entity
 
@@ -19,8 +18,6 @@ from .const import DOMAIN, MANUFACTURER
 from .coordinator import QbusControllerCoordinator
 
 _REFID_REGEX = re.compile(r"^\d+\/(\d+(?:\/\d+)?)$")
-
-StateT = TypeVar("StateT", bound=QbusMqttState)
 
 
 def create_new_entities(
@@ -78,7 +75,7 @@ def create_unique_id(serial_number: str, suffix: str) -> str:
     return f"ctd_{serial_number}_{suffix}"
 
 
-class QbusEntity(Entity, Generic[StateT], ABC):
+class QbusEntity[StateT: QbusMqttState](Entity, ABC):
     """Representation of a Qbus entity."""
 
     _state_cls: type[StateT] = cast(type[StateT], QbusMqttState)
@@ -96,6 +93,7 @@ class QbusEntity(Entity, Generic[StateT], ABC):
         """Initialize the Qbus entity."""
 
         self._mqtt_output = mqtt_output
+        self._link_to_main_device = link_to_main_device
 
         self._topic_factory = QbusMqttTopicFactory()
         self._message_factory = QbusMqttMessageFactory()
@@ -103,8 +101,8 @@ class QbusEntity(Entity, Generic[StateT], ABC):
             mqtt_output.device.id, mqtt_output.id
         )
 
-        ref_id = format_ref_id(mqtt_output.ref_id)
-        suffix = ref_id or ""
+        self._ref_id = format_ref_id(mqtt_output.ref_id)
+        suffix = self._ref_id or ""
 
         if id_suffix:
             suffix += f"_{id_suffix}"
@@ -113,19 +111,33 @@ class QbusEntity(Entity, Generic[StateT], ABC):
             mqtt_output.device.serial_number, suffix
         )
 
-        if link_to_main_device:
-            self._attr_device_info = DeviceInfo(
-                identifiers={create_device_identifier(mqtt_output.device)}
-            )
-        else:
-            self._attr_device_info = DeviceInfo(
-                name=mqtt_output.name.title(),
-                manufacturer=MANUFACTURER,
-                identifiers={(DOMAIN, f"{mqtt_output.device.serial_number}_{ref_id}")},
-                suggested_area=mqtt_output.location.title(),
-                via_device=create_device_identifier(mqtt_output.device),
+    @property
+    @override
+    def device_info(self) -> DeviceInfo:
+        """Return the device info."""
+        if self._link_to_main_device:
+            return DeviceInfo(
+                identifiers={create_device_identifier(self._mqtt_output.device)}
             )
 
+        config_entry = self.platform.config_entry
+        if TYPE_CHECKING:
+            assert config_entry is not None
+        return DeviceInfo(
+            name=self._mqtt_output.name.title(),
+            manufacturer=MANUFACTURER,
+            identifiers={
+                (DOMAIN, f"{self._mqtt_output.device.serial_number}_{self._ref_id}")
+            },
+            suggested_area=self._mqtt_output.location.title(),
+            via_device_id=dr.async_get_device_id_by_identifier(
+                self.hass,
+                create_device_identifier(self._mqtt_output.device),
+                config_entry_id=config_entry.entry_id,
+            ),
+        )
+
+    @override
     async def async_added_to_hass(self) -> None:
         """Run when entity about to be added to hass."""
         self.async_on_remove(

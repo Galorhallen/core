@@ -1,14 +1,18 @@
 """The ToGrill integration."""
 
-from __future__ import annotations
-
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 
 from .coordinator import DeviceNotFound, ToGrillConfigEntry, ToGrillCoordinator
 
-_PLATFORMS: list[Platform] = [Platform.EVENT, Platform.SENSOR, Platform.NUMBER]
+_PLATFORMS: list[Platform] = [
+    Platform.BUTTON,
+    Platform.EVENT,
+    Platform.NUMBER,
+    Platform.SELECT,
+    Platform.SENSOR,
+]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ToGrillConfigEntry) -> bool:

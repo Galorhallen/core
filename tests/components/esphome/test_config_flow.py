@@ -3,44 +3,57 @@
 from ipaddress import ip_address
 import json
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from aioesphomeapi import (
     APIClient,
     APIConnectionError,
+    BluetoothProxyFeature,
+    ConnectionClosedEvent,
     DeviceInfo,
+    DisconnectReason,
     InvalidAuthAPIError,
     InvalidEncryptionKeyAPIError,
     RequiresEncryptionAPIError,
     ResolveAPIError,
+    wifi_mac_to_bluetooth_mac,
 )
 import aiohttp
 import pytest
 
 from homeassistant import config_entries
-from homeassistant.components.esphome import dashboard
+from homeassistant.components.esphome import config_flow, dashboard
 from homeassistant.components.esphome.const import (
     CONF_ALLOW_SERVICE_CALLS,
+    CONF_BLUETOOTH_SCANNING_MODE,
     CONF_DEVICE_NAME,
     CONF_NOISE_PSK,
     CONF_SUBSCRIBE_LOGS,
+    DEFAULT_BLUETOOTH_SCANNING_MODE,
     DEFAULT_NEW_CONFIG_ALLOW_ALLOW_SERVICE_CALLS,
     DOMAIN,
 )
 from homeassistant.components.esphome.encryption_key_storage import (
     ENCRYPTION_KEY_STORAGE_KEY,
+    async_get_encryption_key_storage,
 )
 from homeassistant.config_entries import SOURCE_IGNORE, ConfigFlowResult
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import discovery_flow
 from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
+from homeassistant.helpers.service_info.esphome import ESPHomeServiceInfo
 from homeassistant.helpers.service_info.hassio import HassioServiceInfo
 from homeassistant.helpers.service_info.mqtt import MqttServiceInfo
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
 from . import VALID_NOISE_PSK
-from .conftest import MockGenericDeviceEntryType
+from .conftest import (
+    MockBluetoothEntryType,
+    MockESPHomeDeviceType,
+    MockGenericDeviceEntryType,
+)
 
 from tests.common import MockConfigEntry
 
@@ -341,7 +354,7 @@ async def test_user_resolve_error(hass: HomeAssistant, mock_client: APIClient) -
         user_input={CONF_HOST: "127.0.0.1", CONF_PORT: 6053},
     )
 
-    assert result2["type"] == FlowResultType.CREATE_ENTRY
+    assert result2["type"] is FlowResultType.CREATE_ENTRY
     assert result2["title"] == "test"
     assert result2["data"] == {
         CONF_HOST: "127.0.0.1",
@@ -402,6 +415,45 @@ async def test_user_causes_zeroconf_to_abort(hass: HomeAssistant) -> None:
 
 
 @pytest.mark.usefixtures("mock_setup_entry", "mock_zeroconf")
+async def test_user_provisioning_closed(
+    hass: HomeAssistant,
+    mock_client: APIClient,
+) -> None:
+    """Test user step when the device closed its provisioning window."""
+
+    def _provisioning_closed() -> None:
+        mock_client.add_connection_closed_callback.call_args[0][0](
+            ConnectionClosedEvent(
+                expected_disconnect=True,
+                reason=DisconnectReason.PROVISIONING_CLOSED,
+            )
+        )
+        raise APIConnectionError
+
+    mock_client.device_info.side_effect = _provisioning_closed
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": config_entries.SOURCE_USER},
+        data={CONF_HOST: "127.0.0.1", CONF_PORT: 6053},
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "user"
+    assert result["errors"] == {"base": "provisioning_closed"}
+
+    # Power cycling the device reopens the provisioning window
+    mock_client.device_info.side_effect = None
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_HOST: "127.0.0.1", CONF_PORT: 6053},
+    )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+
+
+@pytest.mark.usefixtures("mock_setup_entry", "mock_zeroconf")
 async def test_user_connection_error(
     hass: HomeAssistant,
     mock_client: APIClient,
@@ -431,7 +483,7 @@ async def test_user_connection_error(
         user_input={CONF_HOST: "127.0.0.1", CONF_PORT: 6053},
     )
 
-    assert result2["type"] == FlowResultType.CREATE_ENTRY
+    assert result2["type"] is FlowResultType.CREATE_ENTRY
     assert result2["title"] == "test"
     assert result2["data"] == {
         CONF_HOST: "127.0.0.1",
@@ -509,7 +561,7 @@ async def test_user_invalid_password(
         result["flow_id"], user_input={CONF_PASSWORD: "good"}
     )
 
-    assert result2["type"] == FlowResultType.CREATE_ENTRY
+    assert result2["type"] is FlowResultType.CREATE_ENTRY
     assert result2["title"] == "test"
     assert result2["data"] == {
         CONF_HOST: "127.0.0.1",
@@ -762,7 +814,7 @@ async def test_login_connection_error(
         result["flow_id"], user_input={CONF_PASSWORD: "good"}
     )
 
-    assert result2["type"] == FlowResultType.CREATE_ENTRY
+    assert result2["type"] is FlowResultType.CREATE_ENTRY
     assert result2["title"] == "test"
     assert result2["data"] == {
         CONF_HOST: "127.0.0.1",
@@ -860,6 +912,79 @@ async def test_discovery_already_configured(hass: HomeAssistant) -> None:
         "name": "unknown",
         "mac": "11:22:33:44:55:aa",
     }
+
+
+@pytest.mark.usefixtures("mock_zeroconf")
+async def test_discovery_does_not_update_host_when_device_is_connected(
+    hass: HomeAssistant,
+    mock_client: APIClient,
+    mock_esphome_device: MockESPHomeDeviceType,
+) -> None:
+    """Test zeroconf discovery does not update host when device is connected."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_HOST: "192.168.1.2",
+            CONF_PORT: 6053,
+            CONF_PASSWORD: "",
+        },
+        unique_id="11:22:33:44:55:aa",
+    )
+    entry.add_to_hass(hass)
+    await mock_esphome_device(mock_client=mock_client, entry=entry)
+
+    service_info = ZeroconfServiceInfo(
+        ip_address=ip_address("192.168.1.99"),
+        ip_addresses=[ip_address("192.168.1.99")],
+        hostname="test.local.",
+        name="mock_name",
+        port=6053,
+        properties={"mac": "1122334455aa"},
+        type="mock_type",
+    )
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_ZEROCONF}, data=service_info
+    )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "already_configured"
+    # Host should NOT be updated since the device is currently connected
+    assert entry.data[CONF_HOST] == "192.168.1.2"
+
+
+@pytest.mark.usefixtures("mock_zeroconf")
+async def test_discovery_does_not_update_host_when_device_is_connected_dhcp(
+    hass: HomeAssistant,
+    mock_client: APIClient,
+    mock_esphome_device: MockESPHomeDeviceType,
+) -> None:
+    """Test DHCP discovery does not update host when device is connected."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_HOST: "192.168.1.2",
+            CONF_PORT: 6053,
+            CONF_PASSWORD: "",
+        },
+        unique_id="11:22:33:44:55:aa",
+    )
+    entry.add_to_hass(hass)
+    await mock_esphome_device(mock_client=mock_client, entry=entry)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": config_entries.SOURCE_DHCP},
+        data=DhcpServiceInfo(
+            ip="192.168.1.99",
+            macaddress="1122334455aa",
+            hostname="test",
+        ),
+    )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "already_configured"
+    # Host should NOT be updated since the device is currently connected
+    assert entry.data[CONF_HOST] == "192.168.1.2"
 
 
 @pytest.mark.usefixtures("mock_client", "mock_setup_entry", "mock_zeroconf")
@@ -1184,6 +1309,42 @@ async def test_reauth_attempt_to_change_mac_aborts(
     }
 
 
+@pytest.mark.usefixtures("mock_zeroconf", "mock_setup_entry")
+async def test_reauth_password_changed(
+    hass: HomeAssistant, mock_client: APIClient
+) -> None:
+    """Test reauth when password has changed."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_HOST: "127.0.0.1", CONF_PORT: 6053, CONF_PASSWORD: "old_password"},
+        unique_id="11:22:33:44:55:aa",
+    )
+    entry.add_to_hass(hass)
+
+    mock_client.connect.side_effect = InvalidAuthAPIError("Invalid password")
+
+    result = await entry.start_reauth_flow(hass)
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "authenticate"
+    assert result["description_placeholders"] == {
+        "name": "Mock Title",
+    }
+
+    mock_client.connect.side_effect = None
+    mock_client.connect.return_value = None
+    mock_client.device_info.return_value = DeviceInfo(
+        uses_password=True, name="test", mac_address="11:22:33:44:55:aa"
+    )
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], user_input={CONF_PASSWORD: "new_password"}
+    )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reauth_successful"
+    assert entry.data[CONF_PASSWORD] == "new_password"
+
+
 @pytest.mark.usefixtures("mock_setup_entry", "mock_zeroconf")
 async def test_reauth_fixed_via_dashboard(
     hass: HomeAssistant,
@@ -1231,6 +1392,389 @@ async def test_reauth_fixed_via_dashboard(
 
 
 @pytest.mark.usefixtures("mock_setup_entry", "mock_zeroconf")
+async def test_reauth_stale_storage_key_tries_dashboard_key(
+    hass: HomeAssistant,
+    mock_client: APIClient,
+    mock_dashboard: dict[str, Any],
+    hass_storage: dict[str, Any],
+) -> None:
+    """Test a stale stored key does not shadow the dashboard's working key."""
+    hass_storage[ENCRYPTION_KEY_STORAGE_KEY] = {
+        "version": 1,
+        "minor_version": 1,
+        "key": ENCRYPTION_KEY_STORAGE_KEY,
+        "data": {"keys": {"11:22:33:44:55:aa": WRONG_NOISE_PSK}},
+    }
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_HOST: "127.0.0.1",
+            CONF_PORT: 6053,
+            CONF_PASSWORD: "",
+            CONF_DEVICE_NAME: "test",
+        },
+        unique_id="11:22:33:44:55:aa",
+    )
+    entry.add_to_hass(hass)
+
+    mock_client.device_info.side_effect = [
+        RequiresEncryptionAPIError,  # initial reauth probe with the entry's empty psk
+        InvalidEncryptionKeyAPIError("Wrong key", "test"),  # stale stored key
+        DeviceInfo(uses_password=False, name="test", mac_address="11:22:33:44:55:aa"),
+    ]
+
+    mock_dashboard["configured"].append({"name": "test", "configuration": "test.yaml"})
+    await dashboard.async_get_dashboard(hass).async_refresh()
+
+    with patch(
+        "homeassistant.components.esphome.coordinator.ESPHomeDashboardAPI.get_encryption_key",
+        return_value=VALID_NOISE_PSK,
+    ):
+        result = await entry.start_reauth_flow(hass)
+
+    assert result["type"] is FlowResultType.ABORT, result
+    assert result["reason"] == "reauth_successful"
+    assert entry.data[CONF_NOISE_PSK] == VALID_NOISE_PSK
+    # The stale stored key is replaced with the one proven on the device.
+    storage = await async_get_encryption_key_storage(hass)
+    assert await storage.async_get_key("11:22:33:44:55:aa") == VALID_NOISE_PSK
+
+
+@pytest.mark.usefixtures("mock_setup_entry", "mock_zeroconf")
+async def test_reauth_working_storage_key_never_asks_dashboard(
+    hass: HomeAssistant,
+    mock_client: APIClient,
+    mock_dashboard: dict[str, Any],
+    hass_storage: dict[str, Any],
+) -> None:
+    """Test the dashboard is not consulted when the stored key already works."""
+    hass_storage[ENCRYPTION_KEY_STORAGE_KEY] = {
+        "version": 1,
+        "minor_version": 1,
+        "key": ENCRYPTION_KEY_STORAGE_KEY,
+        "data": {"keys": {"11:22:33:44:55:aa": VALID_NOISE_PSK}},
+    }
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_HOST: "127.0.0.1",
+            CONF_PORT: 6053,
+            CONF_PASSWORD: "",
+            CONF_DEVICE_NAME: "test",
+        },
+        unique_id="11:22:33:44:55:aa",
+    )
+    entry.add_to_hass(hass)
+
+    mock_client.device_info.return_value = DeviceInfo(
+        uses_password=False, name="test", mac_address="11:22:33:44:55:aa"
+    )
+
+    mock_dashboard["configured"].append({"name": "test", "configuration": "test.yaml"})
+    await dashboard.async_get_dashboard(hass).async_refresh()
+
+    with patch(
+        "homeassistant.components.esphome.coordinator.ESPHomeDashboardAPI.get_encryption_key",
+        return_value=WRONG_NOISE_PSK,
+    ) as mock_get_encryption_key:
+        result = await entry.start_reauth_flow(hass)
+
+    assert result["type"] is FlowResultType.ABORT, result
+    assert result["reason"] == "reauth_successful"
+    assert entry.data[CONF_NOISE_PSK] == VALID_NOISE_PSK
+    mock_get_encryption_key.assert_not_called()
+
+
+@pytest.mark.usefixtures("mock_setup_entry", "mock_zeroconf")
+async def test_reauth_both_keys_wrong_falls_back_to_manual(
+    hass: HomeAssistant,
+    mock_client: APIClient,
+    mock_dashboard: dict[str, Any],
+    hass_storage: dict[str, Any],
+) -> None:
+    """Test both stale sources fall through to manual entry, which repairs storage."""
+    hass_storage[ENCRYPTION_KEY_STORAGE_KEY] = {
+        "version": 1,
+        "minor_version": 1,
+        "key": ENCRYPTION_KEY_STORAGE_KEY,
+        "data": {"keys": {"11:22:33:44:55:aa": WRONG_NOISE_PSK}},
+    }
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_HOST: "127.0.0.1",
+            CONF_PORT: 6053,
+            CONF_PASSWORD: "",
+            CONF_DEVICE_NAME: "test",
+        },
+        unique_id="11:22:33:44:55:aa",
+    )
+    entry.add_to_hass(hass)
+
+    mock_client.device_info.side_effect = [
+        RequiresEncryptionAPIError,  # initial reauth probe with the entry's empty psk
+        InvalidEncryptionKeyAPIError("Wrong key", "test"),  # stale stored key
+        InvalidEncryptionKeyAPIError("Wrong key", "test"),  # stale dashboard key
+        DeviceInfo(uses_password=False, name="test", mac_address="11:22:33:44:55:aa"),
+    ]
+
+    mock_dashboard["configured"].append({"name": "test", "configuration": "test.yaml"})
+    await dashboard.async_get_dashboard(hass).async_refresh()
+
+    with patch(
+        "homeassistant.components.esphome.coordinator.ESPHomeDashboardAPI.get_encryption_key",
+        return_value=INVALID_NOISE_PSK,
+    ):
+        result = await entry.start_reauth_flow(hass)
+        assert result["type"] is FlowResultType.FORM, result
+        assert result["step_id"] == "reauth_confirm"
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], user_input={CONF_NOISE_PSK: VALID_NOISE_PSK}
+        )
+
+    assert result["type"] is FlowResultType.ABORT, result
+    assert result["reason"] == "reauth_successful"
+    assert entry.data[CONF_NOISE_PSK] == VALID_NOISE_PSK
+    # The manually entered working key replaces the stale stored one.
+    storage = await async_get_encryption_key_storage(hass)
+    assert await storage.async_get_key("11:22:33:44:55:aa") == VALID_NOISE_PSK
+
+
+@pytest.mark.usefixtures("mock_setup_entry", "mock_zeroconf")
+async def test_user_flow_stale_storage_key_falls_back_to_dashboard(
+    hass: HomeAssistant,
+    mock_client: APIClient,
+    mock_dashboard: dict[str, Any],
+    hass_storage: dict[str, Any],
+) -> None:
+    """Test a stale stored key does not shadow the dashboard key in the user flow."""
+    hass_storage[ENCRYPTION_KEY_STORAGE_KEY] = {
+        "version": 1,
+        "minor_version": 1,
+        "key": ENCRYPTION_KEY_STORAGE_KEY,
+        "data": {"keys": {"11:22:33:44:55:aa": WRONG_NOISE_PSK}},
+    }
+
+    mock_client.device_info.side_effect = [
+        RequiresEncryptionAPIError,
+        InvalidEncryptionKeyAPIError("Wrong key", "test", "11:22:33:44:55:AA"),
+        InvalidEncryptionKeyAPIError("Wrong key", "test", "11:22:33:44:55:AA"),
+        DeviceInfo(uses_password=False, name="test", mac_address="11:22:33:44:55:AA"),
+    ]
+
+    mock_dashboard["configured"].append({"name": "test", "configuration": "test.yaml"})
+    await dashboard.async_get_dashboard(hass).async_refresh()
+
+    with patch(
+        "homeassistant.components.esphome.coordinator.ESPHomeDashboardAPI.get_encryption_key",
+        return_value=VALID_NOISE_PSK,
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": config_entries.SOURCE_USER},
+            data={CONF_HOST: "127.0.0.1", CONF_PORT: 6053},
+        )
+        await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_NOISE_PSK] == VALID_NOISE_PSK
+    assert mock_client.noise_psk == VALID_NOISE_PSK
+    # The stale stored key was repaired in place with the working one.
+    storage = await async_get_encryption_key_storage(hass)
+    assert await storage.async_get_key("11:22:33:44:55:aa") == VALID_NOISE_PSK
+
+
+@pytest.mark.usefixtures("mock_setup_entry", "mock_zeroconf")
+async def test_reauth_offline_device_stops_candidate_probing(
+    hass: HomeAssistant,
+    mock_client: APIClient,
+    mock_dashboard: dict[str, Any],
+    hass_storage: dict[str, Any],
+) -> None:
+    """Test a non-key connection error stops the loop without asking the dashboard."""
+    hass_storage[ENCRYPTION_KEY_STORAGE_KEY] = {
+        "version": 1,
+        "minor_version": 1,
+        "key": ENCRYPTION_KEY_STORAGE_KEY,
+        "data": {"keys": {"11:22:33:44:55:aa": WRONG_NOISE_PSK}},
+    }
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_HOST: "127.0.0.1",
+            CONF_PORT: 6053,
+            CONF_PASSWORD: "",
+            CONF_DEVICE_NAME: "test",
+        },
+        unique_id="11:22:33:44:55:aa",
+    )
+    entry.add_to_hass(hass)
+
+    mock_client.device_info.side_effect = [
+        RequiresEncryptionAPIError,  # initial reauth probe
+        APIConnectionError("timeout"),  # storage candidate: device went offline
+    ]
+
+    mock_dashboard["configured"].append({"name": "test", "configuration": "test.yaml"})
+    await dashboard.async_get_dashboard(hass).async_refresh()
+
+    with patch(
+        "homeassistant.components.esphome.coordinator.ESPHomeDashboardAPI.get_encryption_key",
+        return_value=VALID_NOISE_PSK,
+    ) as mock_get_encryption_key:
+        result = await entry.start_reauth_flow(hass)
+
+    assert result["type"] is FlowResultType.FORM, result
+    assert result["step_id"] == "reauth_confirm"
+    assert result["errors"] == {"base": "connection_error"}
+    mock_get_encryption_key.assert_not_called()
+
+
+@pytest.mark.usefixtures("mock_setup_entry", "mock_zeroconf")
+async def test_user_flow_offline_device_stops_candidate_probing(
+    hass: HomeAssistant,
+    mock_client: APIClient,
+    mock_dashboard: dict[str, Any],
+    hass_storage: dict[str, Any],
+) -> None:
+    """Test a non-key connection error stops the discovery-path probing."""
+    hass_storage[ENCRYPTION_KEY_STORAGE_KEY] = {
+        "version": 1,
+        "minor_version": 1,
+        "key": ENCRYPTION_KEY_STORAGE_KEY,
+        "data": {"keys": {"11:22:33:44:55:aa": WRONG_NOISE_PSK}},
+    }
+
+    mock_client.device_info.side_effect = [
+        RequiresEncryptionAPIError,
+        InvalidEncryptionKeyAPIError("Wrong key", "test", "11:22:33:44:55:AA"),
+        APIConnectionError("timeout"),  # storage candidate: device went offline
+    ]
+
+    mock_dashboard["configured"].append({"name": "test", "configuration": "test.yaml"})
+    await dashboard.async_get_dashboard(hass).async_refresh()
+
+    with patch(
+        "homeassistant.components.esphome.coordinator.ESPHomeDashboardAPI.get_encryption_key",
+        return_value=VALID_NOISE_PSK,
+    ) as mock_get_encryption_key:
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": config_entries.SOURCE_USER},
+            data={CONF_HOST: "127.0.0.1", CONF_PORT: 6053},
+        )
+        await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "user"
+    assert result["errors"] == {"base": "connection_error"}
+    mock_get_encryption_key.assert_not_called()
+
+
+@pytest.mark.usefixtures("mock_setup_entry", "mock_zeroconf")
+async def test_user_flow_manual_key_repairs_stale_storage(
+    hass: HomeAssistant,
+    mock_client: APIClient,
+    hass_storage: dict[str, Any],
+) -> None:
+    """Test a manual key in the encryption_key step repairs a stale stored key."""
+    hass_storage[ENCRYPTION_KEY_STORAGE_KEY] = {
+        "version": 1,
+        "minor_version": 1,
+        "key": ENCRYPTION_KEY_STORAGE_KEY,
+        "data": {"keys": {"11:22:33:44:55:aa": WRONG_NOISE_PSK}},
+    }
+
+    mock_client.device_info.side_effect = [
+        RequiresEncryptionAPIError,
+        InvalidEncryptionKeyAPIError("Wrong key", "test", "11:22:33:44:55:AA"),
+        InvalidEncryptionKeyAPIError("Wrong key", "test", "11:22:33:44:55:AA"),
+        DeviceInfo(uses_password=False, name="test", mac_address="11:22:33:44:55:AA"),
+    ]
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": config_entries.SOURCE_USER},
+        data={CONF_HOST: "127.0.0.1", CONF_PORT: 6053},
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "encryption_key"
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], user_input={CONF_NOISE_PSK: VALID_NOISE_PSK}
+    )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_NOISE_PSK] == VALID_NOISE_PSK
+    # The stale stored key was repaired with the manually proven one.
+    storage = await async_get_encryption_key_storage(hass)
+    assert await storage.async_get_key("11:22:33:44:55:aa") == VALID_NOISE_PSK
+
+
+async def test_repair_stored_key_without_mac_is_a_no_op(hass: HomeAssistant) -> None:
+    """Test the repair helper does nothing when no MAC is known."""
+    flow = config_flow.EsphomeFlowHandler()
+    flow.hass = hass
+
+    with patch(
+        "homeassistant.components.esphome.config_flow.async_get_encryption_key_storage"
+    ) as mock_storage:
+        await flow._async_repair_stored_key(VALID_NOISE_PSK)
+
+    mock_storage.assert_not_called()
+
+
+@pytest.mark.usefixtures("mock_setup_entry", "mock_zeroconf")
+async def test_reauth_manual_key_is_not_enrolled_in_storage(
+    hass: HomeAssistant,
+    mock_client: APIClient,
+    hass_storage: dict[str, Any],
+) -> None:
+    """Test a manually entered key never creates a storage entry.
+
+    Presence in storage means "HA generated this key" and gates the
+    device-side key wipe on entry removal, so user keys stay out.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_HOST: "127.0.0.1",
+            CONF_PORT: 6053,
+            CONF_PASSWORD: "",
+            CONF_DEVICE_NAME: "test",
+        },
+        unique_id="11:22:33:44:55:aa",
+    )
+    entry.add_to_hass(hass)
+
+    mock_client.device_info.side_effect = [
+        RequiresEncryptionAPIError,  # initial reauth probe
+        DeviceInfo(uses_password=False, name="test", mac_address="11:22:33:44:55:aa"),
+    ]
+
+    result = await entry.start_reauth_flow(hass)
+    assert result["type"] is FlowResultType.FORM, result
+    assert result["step_id"] == "reauth_confirm"
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], user_input={CONF_NOISE_PSK: VALID_NOISE_PSK}
+    )
+
+    assert result["type"] is FlowResultType.ABORT, result
+    assert result["reason"] == "reauth_successful"
+    assert entry.data[CONF_NOISE_PSK] == VALID_NOISE_PSK
+    storage = await async_get_encryption_key_storage(hass)
+    assert await storage.async_get_key("11:22:33:44:55:aa") is None
+
+
+@pytest.mark.usefixtures("mock_setup_entry", "mock_zeroconf")
 async def test_reauth_fixed_via_dashboard_add_encryption_remove_password(
     hass: HomeAssistant,
     mock_client: APIClient,
@@ -1239,7 +1783,7 @@ async def test_reauth_fixed_via_dashboard_add_encryption_remove_password(
 ) -> None:
     """Test reauth fixed automatically via dashboard with password removed."""
     mock_client.device_info.side_effect = (
-        InvalidAuthAPIError,
+        InvalidEncryptionKeyAPIError("Wrong key", "test"),
         DeviceInfo(uses_password=False, name="test", mac_address="11:22:33:44:55:aa"),
     )
 
@@ -1456,6 +2000,45 @@ async def test_reauth_encryption_key_removed(hass: HomeAssistant) -> None:
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reauth_successful"
     assert entry.data[CONF_NOISE_PSK] == ""
+
+
+async def test_reauth_different_device_at_same_address(
+    hass: HomeAssistant, mock_client: APIClient
+) -> None:
+    """Test reauth aborts when a different device is found at the same IP address."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_HOST: "127.0.0.1",
+            CONF_PORT: 6053,
+            CONF_PASSWORD: "",
+            CONF_NOISE_PSK: VALID_NOISE_PSK,
+            CONF_DEVICE_NAME: "old_device",
+        },
+        unique_id="11:22:33:44:55:aa",
+    )
+    entry.add_to_hass(hass)
+
+    # Mock a different device at the same IP (different MAC address)
+    mock_client.device_info.return_value = DeviceInfo(
+        uses_password=False,
+        name="new_device",
+        legacy_bluetooth_proxy_version=0,
+        # Different MAC address than the entry
+        mac_address="AA:BB:CC:DD:EE:FF",
+        esphome_version="1.0.0",
+    )
+
+    result = await entry.start_reauth_flow(hass)
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reauth_unique_id_changed"
+    assert result["description_placeholders"] == {
+        "name": "old_device",
+        "host": "127.0.0.1",
+        "expected_mac": "11:22:33:44:55:aa",
+        "unexpected_mac": "aa:bb:cc:dd:ee:ff",
+        "unexpected_device_name": "new_device",
+    }
 
 
 @pytest.mark.usefixtures("mock_setup_entry", "mock_zeroconf")
@@ -1927,6 +2510,105 @@ async def test_option_flow_subscribe_logs(
     assert len(mock_reload.mock_calls) == 1
 
 
+async def test_option_flow_shows_saved_scanning_mode_when_proxy_unavailable(
+    hass: HomeAssistant,
+    mock_client: APIClient,
+    mock_generic_device_entry: MockGenericDeviceEntryType,
+) -> None:
+    """A previously-saved mode keeps surfacing even if the proxy feature flag is gone."""
+    entry = await mock_generic_device_entry(mock_client=mock_client)
+    hass.config_entries.async_update_entry(
+        entry,
+        options={**entry.options, CONF_BLUETOOTH_SCANNING_MODE: "passive"},
+    )
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is FlowResultType.FORM
+    assert CONF_BLUETOOTH_SCANNING_MODE in result["data_schema"].schema
+    with patch("homeassistant.components.esphome.async_setup_entry", return_value=True):
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            user_input={
+                CONF_ALLOW_SERVICE_CALLS: False,
+                CONF_SUBSCRIBE_LOGS: False,
+                CONF_BLUETOOTH_SCANNING_MODE: "auto",
+            },
+        )
+        await hass.async_block_till_done()
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_BLUETOOTH_SCANNING_MODE] == "auto"
+
+
+async def test_option_flow_unloaded_entry_without_saved_mode(
+    hass: HomeAssistant,
+    mock_client: APIClient,
+    mock_generic_device_entry: MockGenericDeviceEntryType,
+) -> None:
+    """An unloaded entry without a saved scanning mode hides the option."""
+    entry = await mock_generic_device_entry(mock_client=mock_client)
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is FlowResultType.FORM
+    assert CONF_BLUETOOTH_SCANNING_MODE not in result["data_schema"].schema
+
+
+async def test_option_flow_hides_bluetooth_scanning_mode_without_proxy(
+    hass: HomeAssistant,
+    mock_client: APIClient,
+    mock_generic_device_entry: MockGenericDeviceEntryType,
+) -> None:
+    """Devices without a bluetooth proxy must not see the scanning mode option."""
+    entry = await mock_generic_device_entry(mock_client=mock_client)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is FlowResultType.FORM
+    assert CONF_BLUETOOTH_SCANNING_MODE not in result["data_schema"].schema
+    with patch("homeassistant.components.esphome.async_setup_entry", return_value=True):
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            user_input={CONF_ALLOW_SERVICE_CALLS: False, CONF_SUBSCRIBE_LOGS: False},
+        )
+        await hass.async_block_till_done()
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert CONF_BLUETOOTH_SCANNING_MODE not in result["data"]
+
+
+async def test_option_flow_bluetooth_scanning_mode(
+    hass: HomeAssistant,
+    mock_bluetooth_entry: MockBluetoothEntryType,
+) -> None:
+    """Bluetooth proxy devices with FEATURE_STATE_AND_MODE expose the option."""
+    device = await mock_bluetooth_entry(
+        bluetooth_proxy_feature_flags=BluetoothProxyFeature.PASSIVE_SCAN
+        | BluetoothProxyFeature.ACTIVE_CONNECTIONS
+        | BluetoothProxyFeature.RAW_ADVERTISEMENTS
+        | BluetoothProxyFeature.FEATURE_STATE_AND_MODE
+    )
+    entry = device.entry
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is FlowResultType.FORM
+    assert result["data_schema"]({}) == {
+        CONF_ALLOW_SERVICE_CALLS: DEFAULT_NEW_CONFIG_ALLOW_ALLOW_SERVICE_CALLS,
+        CONF_SUBSCRIBE_LOGS: False,
+        CONF_BLUETOOTH_SCANNING_MODE: DEFAULT_BLUETOOTH_SCANNING_MODE,
+    }
+    with patch("homeassistant.components.esphome.async_setup_entry", return_value=True):
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            user_input={
+                CONF_ALLOW_SERVICE_CALLS: False,
+                CONF_SUBSCRIBE_LOGS: False,
+                CONF_BLUETOOTH_SCANNING_MODE: "passive",
+            },
+        )
+        await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_BLUETOOTH_SCANNING_MODE] == "passive"
+
+
 @pytest.mark.usefixtures("mock_setup_entry", "mock_zeroconf")
 async def test_user_discovers_name_no_dashboard(
     hass: HomeAssistant,
@@ -2131,7 +2813,6 @@ async def test_user_flow_name_conflict_overwrite(
         result["flow_id"], user_input={"next_step_id": "name_conflict_overwrite"}
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
-
     assert result["data"] == {
         CONF_HOST: "127.0.0.1",
         CONF_PORT: 6053,
@@ -2495,16 +3176,15 @@ async def test_reconfig_name_conflict_overwrite(
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], user_input={"next_step_id": "name_conflict_overwrite"}
     )
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
 
-    assert result["data"] == {
-        CONF_HOST: "127.0.0.2",
-        CONF_PORT: 6053,
-        CONF_PASSWORD: "",
-        CONF_NOISE_PSK: "",
-        CONF_DEVICE_NAME: "test",
-    }
-    assert result["context"]["unique_id"] == "11:22:33:44:55:bb"
+    assert (
+        hass.config_entries.async_entry_for_domain_unique_id(
+            DOMAIN, "11:22:33:44:55:bb"
+        )
+        is not None
+    )
     assert (
         hass.config_entries.async_entry_for_domain_unique_id(
             DOMAIN, "11:22:33:44:55:aa"
@@ -2529,7 +3209,7 @@ async def test_discovery_dhcp_no_probe_same_host_port_none(
     service_info = DhcpServiceInfo(
         ip="192.168.43.183",
         hostname="test8266",
-        macaddress="11:22:33:44:55:aa",  # Same MAC as configured
+        macaddress="1122334455aa",  # Same MAC as configured
     )
 
     result = await hass.config_entries.flow.async_init(
@@ -2544,3 +3224,330 @@ async def test_discovery_dhcp_no_probe_same_host_port_none(
 
     # Host should remain unchanged
     assert entry.data[CONF_HOST] == "192.168.43.183"
+
+
+@pytest.mark.usefixtures("mock_setup_entry", "mock_zeroconf")
+async def test_user_flow_starts_zwave_discovery(
+    hass: HomeAssistant, mock_client: APIClient
+) -> None:
+    """Test user flow starts Z-Wave JS discovery with Z-Wave device."""
+    # Mock device with Z-Wave capabilities
+    mock_client.device_info = AsyncMock(
+        return_value=DeviceInfo(
+            uses_password=False,
+            name="test-zwave-device",
+            mac_address="11:22:33:44:55:BB",
+            zwave_proxy_feature_flags=1,
+            zwave_home_id=1234567890,
+        )
+    )
+    mock_client.connected_address = "mock-connected-address"
+
+    # Track flow.async_init calls and async_get calls
+    original_async_init = hass.config_entries.flow.async_init
+    original_async_get = hass.config_entries.flow.async_get
+    flow_init_calls = []
+    zwave_flow_id = "mock-zwave-flow-id"
+
+    async def track_async_init(*args, **kwargs):
+        flow_init_calls.append((args, kwargs))
+        # For the Z-Wave flow, return a mock result with the flow_id
+        if args and args[0] == "zwave_js":
+            return {"flow_id": zwave_flow_id, "type": FlowResultType.FORM}
+        # Otherwise call the original
+        return await original_async_init(*args, **kwargs)
+
+    def mock_async_get(flow_id: str):
+        # Return a mock flow for the Z-Wave flow_id
+        if flow_id == zwave_flow_id:
+            return MagicMock()
+        return original_async_get(flow_id)
+
+    with (
+        patch.object(
+            hass.config_entries.flow, "async_init", side_effect=track_async_init
+        ),
+        patch.object(hass.config_entries.flow, "async_get", side_effect=mock_async_get),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": config_entries.SOURCE_USER},
+            data={CONF_HOST: "192.168.1.100", CONF_PORT: 6053},
+        )
+
+    # Verify the entry was created
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == "test-zwave-device"
+    assert result["data"] == {
+        CONF_HOST: "192.168.1.100",
+        CONF_PORT: 6053,
+        CONF_PASSWORD: "",
+        CONF_NOISE_PSK: "",
+        CONF_DEVICE_NAME: "test-zwave-device",
+    }
+
+    # First call is ESPHome flow, second should be Z-Wave flow
+    assert len(flow_init_calls) == 2
+    zwave_call_args, zwave_call_kwargs = flow_init_calls[1]
+    assert zwave_call_args[0] == "zwave_js"
+    assert zwave_call_kwargs["context"] == {
+        "source": config_entries.SOURCE_ESPHOME,
+        "discovery_key": discovery_flow.DiscoveryKey(
+            domain="esphome", key="11:22:33:44:55:BB", version=1
+        ),
+    }
+    assert zwave_call_kwargs["data"] == ESPHomeServiceInfo(
+        name="test-zwave-device",
+        zwave_home_id=1234567890,
+        ip_address="mock-connected-address",
+        port=6053,
+        noise_psk=None,
+    )
+
+    # Verify next_flow was set
+    assert result["next_flow"] == (config_entries.FlowType.CONFIG_FLOW, zwave_flow_id)
+
+
+@pytest.mark.usefixtures("mock_setup_entry", "mock_zeroconf")
+async def test_user_flow_no_zwave_discovery_without_home_id(
+    hass: HomeAssistant, mock_client: APIClient
+) -> None:
+    """Test user flow skips Z-Wave discovery when home_id is not set."""
+    # Mock device with Z-Wave capabilities but no home ID
+    mock_client.device_info = AsyncMock(
+        return_value=DeviceInfo(
+            uses_password=False,
+            name="test-zwave-device-no-id",
+            mac_address="11:22:33:44:55:CC",
+            zwave_proxy_feature_flags=1,
+            zwave_home_id=0,  # No home ID set (fresh adapter or unplugged)
+        )
+    )
+    mock_client.connected_address = "192.168.1.103"
+
+    # Track flow.async_init calls
+    original_async_init = hass.config_entries.flow.async_init
+    flow_init_calls = []
+
+    async def track_async_init(*args, **kwargs):
+        flow_init_calls.append((args, kwargs))
+        return await original_async_init(*args, **kwargs)
+
+    with patch.object(
+        hass.config_entries.flow, "async_init", side_effect=track_async_init
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": config_entries.SOURCE_USER},
+            data={CONF_HOST: "192.168.1.103", CONF_PORT: 6053},
+        )
+
+    # Verify the ESPHome entry was created
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == "test-zwave-device-no-id"
+    assert result["data"] == {
+        CONF_HOST: "192.168.1.103",
+        CONF_PORT: 6053,
+        CONF_PASSWORD: "",
+        CONF_NOISE_PSK: "",
+        CONF_DEVICE_NAME: "test-zwave-device-no-id",
+    }
+
+    # Verify only ESPHome flow was initiated, no Z-Wave flow
+    assert len(flow_init_calls) == 1
+    assert flow_init_calls[0][0][0] == DOMAIN
+
+    # Verify next_flow was NOT set
+    assert "next_flow" not in result
+
+
+@pytest.mark.usefixtures("mock_setup_entry", "mock_zeroconf")
+async def test_user_flow_no_zwave_discovery_without_capabilities(
+    hass: HomeAssistant, mock_client: APIClient
+) -> None:
+    """Test user flow skips Z-Wave discovery without Z-Wave capabilities."""
+    # Mock device without Z-Wave capabilities
+    mock_client.device_info = AsyncMock(
+        return_value=DeviceInfo(
+            uses_password=False,
+            name="test-regular-device",
+            mac_address="11:22:33:44:55:CC",
+        )
+    )
+
+    # Track flow.async_init calls
+    original_async_init = hass.config_entries.flow.async_init
+    flow_init_calls = []
+
+    async def track_async_init(*args, **kwargs):
+        flow_init_calls.append((args, kwargs))
+        return await original_async_init(*args, **kwargs)
+
+    with patch.object(
+        hass.config_entries.flow, "async_init", side_effect=track_async_init
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": config_entries.SOURCE_USER},
+            data={CONF_HOST: "192.168.1.101", CONF_PORT: 6053},
+        )
+
+    # Verify the entry was created
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == "test-regular-device"
+
+    # Verify Z-Wave discovery flow was NOT started (only ESPHome flow)
+    assert len(flow_init_calls) == 1
+
+    # Verify next_flow was not set
+    assert "next_flow" not in result
+
+
+@pytest.mark.usefixtures("mock_setup_entry", "mock_zeroconf")
+async def test_user_flow_zwave_discovery_aborts(
+    hass: HomeAssistant, mock_client: APIClient
+) -> None:
+    """Test that the user flow handles Z-Wave discovery abort gracefully."""
+    # Mock device with Z-Wave capabilities
+    mock_client.device_info = AsyncMock(
+        return_value=DeviceInfo(
+            uses_password=False,
+            name="test-zwave-device",
+            mac_address="11:22:33:44:55:DD",
+            zwave_proxy_feature_flags=1,
+            zwave_home_id=9876543210,
+        )
+    )
+    mock_client.connected_address = "192.168.1.102"
+
+    # Track flow.async_init calls
+    original_async_init = hass.config_entries.flow.async_init
+    flow_init_calls = []
+
+    async def track_async_init(*args, **kwargs):
+        flow_init_calls.append((args, kwargs))
+        # For the Z-Wave flow, return an ABORT result
+        if args and args[0] == "zwave_js":
+            return {
+                "type": FlowResultType.ABORT,
+                "reason": "already_configured",
+            }
+        # Otherwise call the original
+        return await original_async_init(*args, **kwargs)
+
+    with patch.object(
+        hass.config_entries.flow, "async_init", side_effect=track_async_init
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": config_entries.SOURCE_USER},
+            data={CONF_HOST: "192.168.1.102", CONF_PORT: 6053},
+        )
+
+    # Verify the ESPHome entry was still created despite Z-Wave flow aborting
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == "test-zwave-device"
+    assert result["data"] == {
+        CONF_HOST: "192.168.1.102",
+        CONF_PORT: 6053,
+        CONF_PASSWORD: "",
+        CONF_NOISE_PSK: "",
+        CONF_DEVICE_NAME: "test-zwave-device",
+    }
+
+    # Verify Z-Wave discovery flow was attempted
+    assert len(flow_init_calls) == 2
+    zwave_call_args, zwave_call_kwargs = flow_init_calls[1]
+    assert zwave_call_args[0] == "zwave_js"
+    assert zwave_call_kwargs["context"]["source"] == config_entries.SOURCE_ESPHOME
+    assert zwave_call_kwargs["context"]["discovery_key"] == discovery_flow.DiscoveryKey(
+        domain=DOMAIN,
+        key="11:22:33:44:55:DD",
+        version=1,
+    )
+    assert zwave_call_kwargs["data"] == ESPHomeServiceInfo(
+        name="test-zwave-device",
+        zwave_home_id=9876543210,
+        ip_address="192.168.1.102",
+        port=6053,
+        noise_psk=None,
+    )
+
+    # Verify next_flow was NOT set since Z-Wave flow aborted
+    assert "next_flow" not in result
+
+
+@pytest.mark.usefixtures("mock_setup_entry", "mock_zeroconf")
+async def test_zeroconf_notifies_improv_ble(
+    hass: HomeAssistant,
+    mock_client: APIClient,
+) -> None:
+    """Test that zeroconf discovery notifies improv_ble integration."""
+    service_info = ZeroconfServiceInfo(
+        ip_address=ip_address("192.168.43.183"),
+        ip_addresses=[ip_address("192.168.43.183")],
+        hostname="test8266.local.",
+        name="mock_name",
+        port=6053,
+        properties={
+            "mac": "aabbccddeeff",
+        },
+        type="mock_type",
+    )
+
+    # Patch improv_ble to ensure it's available and track calls
+    with patch(
+        "homeassistant.components.improv_ble.async_register_next_flow"
+    ) as mock_register:
+        flow = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": config_entries.SOURCE_ZEROCONF},
+            data=service_info,
+        )
+
+    assert flow["type"] is FlowResultType.FORM
+    assert flow["step_id"] == "discovery_confirm"
+
+    # Verify improv_ble.async_register_next_flow was called with correct parameters
+    assert len(mock_register.mock_calls) == 1
+    call_args = mock_register.mock_calls[0].args
+    assert call_args[0] is hass  # HomeAssistant instance
+    # WiFi MAC aabbccddeeff + 1 = Bluetooth MAC aabbccddee00
+    # (wifi_mac_to_bluetooth_mac from aioesphomeapi)
+    expected_ble_mac = wifi_mac_to_bluetooth_mac("aa:bb:cc:dd:ee:ff")
+    assert call_args[1] == expected_ble_mac  # BLE MAC address
+    assert call_args[2] == flow["flow_id"]  # Flow ID
+
+
+@pytest.mark.usefixtures("mock_setup_entry", "mock_zeroconf")
+async def test_zeroconf_when_improv_ble_not_available(
+    hass: HomeAssistant,
+    mock_client: APIClient,
+) -> None:
+    """Test that zeroconf discovery works when improv_ble is not available."""
+    service_info = ZeroconfServiceInfo(
+        ip_address=ip_address("192.168.43.183"),
+        ip_addresses=[ip_address("192.168.43.183")],
+        hostname="test8266.local.",
+        name="mock_name",
+        port=6053,
+        properties={
+            "mac": "aabbccddeeff",
+        },
+        type="mock_type",
+    )
+
+    # Mock async_import_module to return None (simulating improv_ble not available)
+    with patch(
+        "homeassistant.components.esphome.config_flow.async_import_module",
+        return_value=None,
+    ):
+        flow = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": config_entries.SOURCE_ZEROCONF},
+            data=service_info,
+        )
+
+    # Flow should still work even without improv_ble
+    assert flow["type"] is FlowResultType.FORM
+    assert flow["step_id"] == "discovery_confirm"

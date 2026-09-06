@@ -1,19 +1,17 @@
 """Config flow for System Bridge integration."""
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Mapping
 import logging
-from typing import Any
+from typing import Any, override
 
 from systembridgeconnector.exceptions import (
     AuthenticationException,
     ConnectionClosedException,
     ConnectionErrorException,
 )
+from systembridgeconnector.models.modules import GetData, Module
 from systembridgeconnector.websocket_client import WebSocketClient
-from systembridgemodels.modules import GetData, Module
 import voluptuous as vol
 
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigFlow, ConfigFlowResult
@@ -118,7 +116,7 @@ class SystemBridgeConfigFlow(
     """Handle a config flow for System Bridge."""
 
     VERSION = 1
-    MINOR_VERSION = 2
+    MINOR_VERSION = 3
 
     _name: str
 
@@ -126,13 +124,15 @@ class SystemBridgeConfigFlow(
         """Initialize flow."""
         self._input: dict[str, Any] = {}
 
+    @override
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Handle the initial step."""
         if user_input is None:
             return self.async_show_form(
-                step_id="user", data_schema=STEP_USER_DATA_SCHEMA
+                step_id="user",
+                data_schema=STEP_USER_DATA_SCHEMA,
             )
 
         errors, info = await _async_get_info(self.hass, user_input)
@@ -144,7 +144,9 @@ class SystemBridgeConfigFlow(
             return self.async_create_entry(title=info["hostname"], data=user_input)
 
         return self.async_show_form(
-            step_id="user", data_schema=STEP_USER_DATA_SCHEMA, errors=errors
+            step_id="user",
+            data_schema=STEP_USER_DATA_SCHEMA,
+            errors=errors,
         )
 
     async def async_step_authenticate(
@@ -174,10 +176,13 @@ class SystemBridgeConfigFlow(
         return self.async_show_form(
             step_id="authenticate",
             data_schema=STEP_AUTHENTICATE_DATA_SCHEMA,
-            description_placeholders={"name": self._name},
+            description_placeholders={
+                "name": self._name,
+            },
             errors=errors,
         )
 
+    @override
     async def async_step_zeroconf(
         self, discovery_info: ZeroconfServiceInfo
     ) -> ConfigFlowResult:

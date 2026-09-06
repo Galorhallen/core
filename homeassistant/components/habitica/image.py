@@ -1,12 +1,13 @@
 """Image platform for Habitica integration."""
 
-from __future__ import annotations
-
 from enum import StrEnum
+from typing import TYPE_CHECKING, override
+from uuid import UUID
 
 from habiticalib import Avatar, ContentData, extract_avatar
 
 from homeassistant.components.image import Image, ImageEntity, ImageEntityDescription
+from homeassistant.config_entries import ConfigSubentry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
@@ -18,7 +19,7 @@ from .coordinator import (
     HabiticaDataUpdateCoordinator,
     HabiticaPartyCoordinator,
 )
-from .entity import HabiticaBase, HabiticaPartyBase
+from .entity import HabiticaBase, HabiticaPartyBase, HabiticaPartyMemberBase
 
 PARALLEL_UPDATES = 1
 
@@ -47,6 +48,22 @@ async def async_setup_entry(
                 hass, party_coordinator, config_entry, coordinator.content
             )
         )
+        for subentry_id, subentry in config_entry.subentries.items():
+            if (
+                subentry.unique_id
+                and UUID(subentry.unique_id) in party_coordinator.data.members
+            ):
+                async_add_entities(
+                    [
+                        HabiticaPartyMemberImage(
+                            hass,
+                            coordinator,
+                            party_coordinator,
+                            subentry,
+                        )
+                    ],
+                    config_subentry_id=subentry_id,
+                )
 
     async_add_entities(entities)
 
@@ -66,28 +83,54 @@ class HabiticaImage(HabiticaBase, ImageEntity):
         self,
         hass: HomeAssistant,
         coordinator: HabiticaDataUpdateCoordinator,
+        subentry: ConfigSubentry | None = None,
     ) -> None:
         """Initialize the image entity."""
-        super().__init__(coordinator, self.entity_description)
+        HabiticaBase.__init__(self, coordinator, self.entity_description, subentry)
         ImageEntity.__init__(self, hass)
         self._attr_image_last_updated = dt_util.utcnow()
-        self._avatar = extract_avatar(self.coordinator.data.user)
+        if TYPE_CHECKING:
+            assert self.user
+        self._avatar = extract_avatar(self.user)
 
+    @override
     def _handle_coordinator_update(self) -> None:
-        """Check if equipped gear and other things have changed since last avatar image generation."""
+        """Check if equipped gear and other things have changed.
 
-        if self._avatar != self.coordinator.data.user:
-            self._avatar = extract_avatar(self.coordinator.data.user)
+        Since last avatar image generation.
+        """
+
+        if self.user is not None and self._avatar != self.user:
+            self._avatar = extract_avatar(self.user)
             self._attr_image_last_updated = dt_util.utcnow()
             self._cache = None
 
         return super()._handle_coordinator_update()
 
+    @override
     async def async_image(self) -> bytes | None:
         """Return cached bytes, otherwise generate new avatar."""
         if not self._cache and self._avatar:
             self._cache = await self.coordinator.generate_avatar(self._avatar)
         return self._cache
+
+
+class HabiticaPartyMemberImage(HabiticaImage, HabiticaPartyMemberBase):
+    """A Habitica party member image entity."""
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        coordinator: HabiticaDataUpdateCoordinator,
+        party_coordinator: HabiticaPartyCoordinator,
+        subentry: ConfigSubentry | None = None,
+    ) -> None:
+        """Initialize the image entity."""
+
+        HabiticaPartyMemberBase.__init__(
+            self, coordinator, party_coordinator, self.entity_description, subentry
+        )
+        super().__init__(hass, coordinator, subentry)
 
 
 class HabiticaPartyImage(HabiticaPartyBase, ImageEntity):
@@ -113,6 +156,7 @@ class HabiticaPartyImage(HabiticaPartyBase, ImageEntity):
         self._attr_image_url = self.image_url
         self._attr_image_last_updated = dt_util.utcnow()
 
+    @override
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
 
@@ -124,14 +168,16 @@ class HabiticaPartyImage(HabiticaPartyBase, ImageEntity):
         super()._handle_coordinator_update()
 
     @property
+    @override
     def image_url(self) -> str | None:
         """Return URL of image."""
         return (
             f"{ASSETS_URL}quest_{key}.png"
-            if (key := self.coordinator.data.quest.key)
+            if (key := self.coordinator.data.party.quest.key)
             else None
         )
 
+    @override
     async def _async_load_image_from_url(self, url: str) -> Image | None:
         """Load an image by url.
 

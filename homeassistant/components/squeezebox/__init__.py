@@ -1,5 +1,6 @@
 """The Squeezebox integration."""
 
+import asyncio
 from asyncio import timeout
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -21,21 +22,23 @@ from homeassistant.exceptions import (
     ConfigEntryAuthFailed,
     ConfigEntryError,
     ConfigEntryNotReady,
+    HomeAssistantError,
 )
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import config_validation as cv, device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import (
     CONNECTION_NETWORK_MAC,
+    AnyDeviceEntry,
     DeviceEntryType,
-    format_mac,
 )
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_call_later
+from homeassistant.helpers.typing import ConfigType
+from homeassistant.util.hass_dict import HassKey
 
 from .const import (
     CONF_HTTPS,
     DISCOVERY_INTERVAL,
-    DISCOVERY_TASK,
     DOMAIN,
     SERVER_MANUFACTURER,
     SERVER_MODEL,
@@ -52,9 +55,11 @@ from .coordinator import (
     LMSStatusDataUpdateCoordinator,
     SqueezeBoxPlayerUpdateCoordinator,
 )
+from .services import async_setup_services
 
 _LOGGER = logging.getLogger(__name__)
 
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 PLATFORMS = [
     Platform.BINARY_SENSOR,
     Platform.BUTTON,
@@ -64,6 +69,8 @@ PLATFORMS = [
     Platform.UPDATE,
 ]
 
+SQUEEZEBOX_HASS_DATA: HassKey[asyncio.Task] = HassKey(DOMAIN)
+
 
 @dataclass
 class SqueezeboxData:
@@ -71,10 +78,19 @@ class SqueezeboxData:
 
     coordinator: LMSStatusDataUpdateCoordinator
     server: Server
+    player_coordinators: dict[str, SqueezeBoxPlayerUpdateCoordinator] = field(
+        default_factory=dict
+    )
     known_player_ids: set[str] = field(default_factory=set)
 
 
 type SqueezeboxConfigEntry = ConfigEntry[SqueezeboxData]
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Set up the integration."""
+    async_setup_services(hass)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: SqueezeboxConfigEntry) -> bool:
@@ -123,7 +139,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: SqueezeboxConfigEntry) -
                 },
             )
 
-        # For other errors where status is None (e.g., server error, connection refused by server)
+        # For other errors where status is None
+        # (e.g., server error, connection refused by server)
         _LOGGER.warning(
             "LMS %s returned no status or an error (HTTP status: %s). Retrying setup",
             host,
@@ -162,7 +179,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SqueezeboxConfigEntry) -
     version = (STATUS_QUERY_VERSION in status and status[STATUS_QUERY_VERSION]) or None
     # mac can be missing
     mac_connect = (
-        {(CONNECTION_NETWORK_MAC, format_mac(status[STATUS_QUERY_MAC]))}
+        {(CONNECTION_NETWORK_MAC, status[STATUS_QUERY_MAC])}
         if STATUS_QUERY_MAC in status
         else None
     )
@@ -193,7 +210,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: SqueezeboxConfigEntry) -
             if player.player_id in entry.runtime_data.known_player_ids:
                 await player.async_update()
                 async_dispatcher_send(
-                    hass, SIGNAL_PLAYER_REDISCOVERED, player.player_id, player.connected
+                    hass,
+                    SIGNAL_PLAYER_REDISCOVERED + entry.entry_id,
+                    player.player_id,
+                    player.connected,
                 )
             else:
                 _LOGGER.debug("Adding new entity: %s", player)
@@ -201,9 +221,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: SqueezeboxConfigEntry) -
                     hass, entry, player, lms.uuid
                 )
                 await player_coordinator.async_refresh()
+                entry.runtime_data.player_coordinators[player.player_id] = (
+                    player_coordinator
+                )
                 entry.runtime_data.known_player_ids.add(player.player_id)
                 async_dispatcher_send(
-                    hass, SIGNAL_PLAYER_DISCOVERED, player_coordinator
+                    hass, SIGNAL_PLAYER_DISCOVERED + entry.entry_id, player_coordinator
                 )
 
         if players := await lms.async_get_players():
@@ -240,7 +263,43 @@ async def async_unload_entry(hass: HomeAssistant, entry: SqueezeboxConfigEntry) 
     current_entries = hass.config_entries.async_entries(DOMAIN)
     if len(current_entries) == 1 and current_entries[0] == entry:
         _LOGGER.debug("Stopping server discovery task")
-        hass.data[DOMAIN][DISCOVERY_TASK].cancel()
-        hass.data[DOMAIN].pop(DISCOVERY_TASK)
+        hass.data[SQUEEZEBOX_HASS_DATA].cancel()
+        hass.data.pop(SQUEEZEBOX_HASS_DATA)
 
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant,
+    config_entry: SqueezeboxConfigEntry,
+    device_entry: AnyDeviceEntry,
+) -> bool:
+    """Allow removal of a Squeezebox player only if its coordinator is unavailable."""
+    if not isinstance(device_entry, dr.DeviceEntry):
+        # This integration does not create child devices.
+        return False
+    if device_entry.entry_type is DeviceEntryType.SERVICE:
+        raise HomeAssistantError(
+            f"Cannot remove Lyrion Music Server '{device_entry.name}' directly. "
+            "Please delete the associated config entry instead."
+        )
+
+    player_id = next(
+        (id_ for domain, id_ in device_entry.identifiers if domain == DOMAIN), None
+    )
+
+    if not player_id:
+        return False  # Not a Squeezebox device
+
+    coordinator = config_entry.runtime_data.player_coordinators.get(player_id)
+
+    if coordinator is None:
+        return True
+
+    if coordinator.available:
+        raise HomeAssistantError(
+            f"Cannot remove Squeezebox player '{coordinator.player_uuid}' "
+            "because it is currently online."
+        )
+
+    return True

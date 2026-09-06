@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import override
 
 from whirlpool.appliance import Appliance
 
@@ -17,6 +18,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from . import WhirlpoolConfigEntry
 from .entity import WhirlpoolEntity
 
+PARALLEL_UPDATES = 1
 SCAN_INTERVAL = timedelta(minutes=5)
 
 
@@ -70,6 +72,7 @@ class WhirlpoolBinarySensor(WhirlpoolEntity, BinarySensorEntity):
         self.entity_description: WhirlpoolBinarySensorEntityDescription = description
 
     @property
+    @override
     def is_on(self) -> bool | None:
         """Return true if the binary sensor is on."""
         return self.entity_description.value_fn(self._appliance)

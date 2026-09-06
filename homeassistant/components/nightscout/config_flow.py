@@ -1,7 +1,7 @@
 """Config flow for Nightscout integration."""
 
 import logging
-from typing import Any
+from typing import Any, override
 
 from aiohttp import ClientError, ClientResponseError
 from py_nightscout import Api as NightscoutAPI
@@ -42,6 +42,7 @@ class NightscoutConfigFlow(ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
+    @override
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -63,7 +64,12 @@ class NightscoutConfigFlow(ConfigFlow, domain=DOMAIN):
                 return self.async_create_entry(title=info["title"], data=user_input)
 
         return self.async_show_form(
-            step_id="user", data_schema=DATA_SCHEMA, errors=errors
+            step_id="user",
+            data_schema=DATA_SCHEMA,
+            errors=errors,
+            description_placeholders={
+                "example_url": "https://myhomeassistant.duckdns.org:5423",
+            },
         )
 
 

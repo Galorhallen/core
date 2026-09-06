@@ -1,12 +1,10 @@
 """Coordinator for the PlayStation Network Integration."""
 
-from __future__ import annotations
-
 from abc import abstractmethod
 from dataclasses import dataclass
 from datetime import timedelta
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, override
 
 from psnawp_api.core.psnawp_exceptions import (
     PSNAWPAuthenticationError,
@@ -21,12 +19,14 @@ from psnawp_api.models.group.group_datatypes import GroupDetails
 from psnawp_api.models.trophies import TrophyTitle
 
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
+from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import (
     ConfigEntryAuthFailed,
     ConfigEntryError,
     ConfigEntryNotReady,
 )
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import DOMAIN
@@ -45,6 +45,7 @@ class PlaystationNetworkRuntimeData:
     trophy_titles: PlaystationNetworkTrophyTitlesCoordinator
     groups: PlaystationNetworkGroupsUpdateCoordinator
     friends: dict[str, PlaystationNetworkFriendDataCoordinator]
+    friends_list: PlaystationNetworkFriendlistCoordinator
 
 
 class PlayStationNetworkBaseCoordinator[_DataT](DataUpdateCoordinator[_DataT]):
@@ -74,6 +75,7 @@ class PlayStationNetworkBaseCoordinator[_DataT](DataUpdateCoordinator[_DataT]):
     async def update_data(self) -> _DataT:
         """Update coordinator data."""
 
+    @override
     async def _async_update_data(self) -> _DataT:
         """Get the latest data from the PSN."""
         try:
@@ -97,6 +99,7 @@ class PlaystationNetworkUserDataCoordinator(
 
     _update_interval = timedelta(seconds=30)
 
+    @override
     async def _async_setup(self) -> None:
         """Set up the coordinator."""
 
@@ -113,6 +116,7 @@ class PlaystationNetworkUserDataCoordinator(
                 translation_key="update_failed",
             ) from error
 
+    @override
     async def update_data(self) -> PlaystationNetworkData:
         """Get the latest data from the PSN."""
         return await self.psn.get_data()
@@ -125,6 +129,7 @@ class PlaystationNetworkTrophyTitlesCoordinator(
 
     _update_interval = timedelta(days=1)
 
+    @override
     async def update_data(self) -> list[TrophyTitle]:
         """Update trophy titles data."""
         self.psn.trophy_titles = await self.hass.async_add_executor_job(
@@ -134,6 +139,26 @@ class PlaystationNetworkTrophyTitlesCoordinator(
         return self.psn.trophy_titles
 
 
+class PlaystationNetworkFriendlistCoordinator(
+    PlayStationNetworkBaseCoordinator[dict[str, User]]
+):
+    """Friend list data update coordinator for PSN."""
+
+    _update_interval = timedelta(hours=3)
+
+    @override
+    async def update_data(self) -> dict[str, User]:
+        """Update trophy titles data."""
+
+        self.psn.friends_list = await self.hass.async_add_executor_job(
+            lambda: {
+                friend.account_id: friend for friend in self.psn.user.friends_list()
+            }
+        )
+        await self.config_entry.runtime_data.user_data.async_request_refresh()
+        return self.psn.friends_list
+
+
 class PlaystationNetworkGroupsUpdateCoordinator(
     PlayStationNetworkBaseCoordinator[dict[str, GroupDetails]]
 ):
@@ -141,15 +166,33 @@ class PlaystationNetworkGroupsUpdateCoordinator(
 
     _update_interval = timedelta(hours=3)
 
+    @override
     async def update_data(self) -> dict[str, GroupDetails]:
         """Update groups data."""
-        return await self.hass.async_add_executor_job(
-            lambda: {
-                group_info.group_id: group_info.get_group_information()
-                for group_info in self.psn.client.get_groups()
-                if not group_info.group_id.startswith("~")
-            }
-        )
+        try:
+            return await self.hass.async_add_executor_job(
+                lambda: {
+                    group_info.group_id: group_info.get_group_information()
+                    for group_info in self.psn.client.get_groups()
+                    if not group_info.group_id.startswith("~")
+                }
+            )
+        except PSNAWPForbiddenError as e:
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                f"group_chat_forbidden_{self.config_entry.entry_id}",
+                is_fixable=False,
+                issue_domain=DOMAIN,
+                severity=ir.IssueSeverity.ERROR,
+                translation_key="group_chat_forbidden",
+                translation_placeholders={
+                    CONF_NAME: self.config_entry.title,
+                    "error_message": e.message or "",
+                },
+            )
+            await self.async_shutdown()
+            return {}
 
 
 class PlaystationNetworkFriendDataCoordinator(
@@ -178,9 +221,13 @@ class PlaystationNetworkFriendDataCoordinator(
         """Set up the coordinator."""
         if TYPE_CHECKING:
             assert self.subentry.unique_id
-        self.user = self.psn.psn.user(account_id=self.subentry.unique_id)
+        self.user = self.psn.friends_list.get(
+            self.subentry.unique_id
+        ) or self.psn.psn.user(account_id=self.subentry.unique_id)
+
         self.profile = self.user.profile()
 
+    @override
     async def _async_setup(self) -> None:
         """Set up the coordinator."""
 
@@ -209,12 +256,7 @@ class PlaystationNetworkFriendDataCoordinator(
     def _update_data(self) -> PlaystationNetworkData:
         """Update friend status data."""
         try:
-            return PlaystationNetworkData(
-                username=self.user.online_id,
-                account_id=self.user.account_id,
-                presence=self.user.get_presence(),
-                profile=self.profile,
-            )
+            presence = self.user.get_presence()
         except PSNAWPForbiddenError as error:
             raise UpdateFailed(
                 translation_domain=DOMAIN,
@@ -224,6 +266,20 @@ class PlaystationNetworkFriendDataCoordinator(
         except PSNAWPError:
             raise
 
+        try:
+            trophy_summary = self.user.trophy_summary()
+        except PSNAWPForbiddenError:
+            trophy_summary = None
+
+        return PlaystationNetworkData(
+            username=self.user.online_id,
+            account_id=self.user.account_id,
+            profile=self.profile,
+            presence=presence,
+            trophy_summary=trophy_summary,
+        )
+
+    @override
     async def update_data(self) -> PlaystationNetworkData:
         """Update friend status data."""
         return await self.hass.async_add_executor_job(self._update_data)

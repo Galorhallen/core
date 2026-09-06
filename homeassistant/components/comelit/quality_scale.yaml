@@ -12,9 +12,15 @@ rules:
   docs-actions:
     status: exempt
     comment: no actions
+  docs-conditions:
+    status: exempt
+    comment: This integration does not have any conditions.
   docs-high-level-description: done
   docs-installation-instructions: done
   docs-removal-instructions: done
+  docs-triggers:
+    status: exempt
+    comment: This integration does not have any triggers.
   entity-event-setup:
     status: exempt
     comment: no events
@@ -57,9 +63,7 @@ rules:
   docs-supported-functions: done
   docs-troubleshooting: done
   docs-use-cases: done
-  dynamic-devices:
-    status: todo
-    comment: missing implementation
+  dynamic-devices: done
   entity-category:
     status: exempt
     comment: no config or diagnostic entities
@@ -72,9 +76,7 @@ rules:
   repair-issues:
     status: exempt
     comment: no known use cases for repair issues or flows, yet
-  stale-devices:
-    status: todo
-    comment: missing implementation
+  stale-devices: done
 
   # Platinum
   async-dependency: done

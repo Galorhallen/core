@@ -22,7 +22,7 @@ from hatasmota.utils import (
 )
 import pytest
 
-from homeassistant.components.tasmota.const import DEFAULT_PREFIX, DOMAIN
+from homeassistant.components.tasmota.const import DEFAULT_PREFIX
 from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
@@ -36,6 +36,7 @@ DEFAULT_CONFIG = {
     "fn": ["Test", "Beer", "Milk", "Four", None],
     "hn": "tasmota_49A3BC-0956",
     "if": 0,  # iFan
+    "cam": 0,  # webcam
     "lk": 1,  # RGB + white channels linked to a single light
     "mac": "00000049A3BC",
     "md": "Sonoff Basic",
@@ -58,7 +59,7 @@ DEFAULT_CONFIG = {
         "20": 0,  # Update of Dimmer/Color/CT without turning power on
         "30": 0,  # Enforce Home Assistant auto-discovery as light
         "68": 0,  # Multi-channel PWM instead of a single light
-        "73": 0,  # Enable Buttons decoupling and send multi-press and hold MQTT messages
+        "73": 0,  # Enable Buttons decoupling and send multi-press
         "82": 0,  # Reduce the CT range from 153..500 to 200.380
         "114": 0,  # Enable sending switch MQTT messages
     },
@@ -93,7 +94,7 @@ DEFAULT_CONFIG_9_0_0_3 = {
         "20": 0,  # Update of Dimmer/Color/CT without turning power on
         "30": 0,  # Enforce Home Assistant auto-discovery as light
         "68": 0,  # Multi-channel PWM instead of a single light
-        "73": 0,  # Enable Buttons decoupling and send multi-press and hold MQTT messages
+        "73": 0,  # Enable Buttons decoupling and send multi-press
         "80": 0,  # Blinds and shutters support
         "82": 0,  # Reduce the CT range from 153..500 to 200.380
     },
@@ -116,13 +117,10 @@ async def remove_device(
     hass: HomeAssistant,
     hass_ws_client: WebSocketGenerator,
     device_id: str,
-    config_entry_id: str | None = None,
 ) -> None:
-    """Remove config entry from a device."""
-    if config_entry_id is None:
-        config_entry_id = hass.config_entries.async_entries(DOMAIN)[0].entry_id
+    """Remove a device."""
     ws_client = await hass_ws_client(hass)
-    response = await ws_client.remove_device(device_id, config_entry_id)
+    response = await ws_client.remove_device(device_id)
     assert response["success"]
 
 
@@ -473,7 +471,9 @@ async def help_test_availability_poll_state(
     await hass.async_block_till_done()
     await hass.async_block_till_done()
     await hass.async_block_till_done()
-    mqtt_mock.async_publish.assert_called_once_with(poll_topic, poll_payload, 0, False)
+    mqtt_mock.async_publish.assert_called_once_with(
+        poll_topic, poll_payload, 0, False, message_expiry_interval=None
+    )
     mqtt_mock.async_publish.reset_mock()
 
     # Disconnected from MQTT server
@@ -501,7 +501,9 @@ async def help_test_availability_poll_state(
     await hass.async_block_till_done()
     await hass.async_block_till_done()
     await hass.async_block_till_done()
-    mqtt_mock.async_publish.assert_called_once_with(poll_topic, poll_payload, 0, False)
+    mqtt_mock.async_publish.assert_called_once_with(
+        poll_topic, poll_payload, 0, False, message_expiry_interval=None
+    )
 
 
 async def help_test_discovery_removal(
@@ -535,8 +537,9 @@ async def help_test_discovery_removal(
         await hass.async_block_till_done()
 
     # Verify device and entity registry entries are created
-    device_entry = device_reg.async_get_device(
-        connections={(dr.CONNECTION_NETWORK_MAC, config1[CONF_MAC])}
+    device_entry = device_reg.async_get_device_by_connection(
+        (dr.CONNECTION_NETWORK_MAC, config1[CONF_MAC]),
+        hass.config_entries.async_entries("tasmota")[0].entry_id,
     )
     assert device_entry is not None
     entity_entry = entity_reg.async_get(f"{domain}.{object_id}")
@@ -558,8 +561,9 @@ async def help_test_discovery_removal(
         await hass.async_block_till_done()
 
     # Verify entity registry entries are cleared
-    device_entry = device_reg.async_get_device(
-        connections={(dr.CONNECTION_NETWORK_MAC, config2[CONF_MAC])}
+    device_entry = device_reg.async_get_device_by_connection(
+        (dr.CONNECTION_NETWORK_MAC, config2[CONF_MAC]),
+        hass.config_entries.async_entries("tasmota")[0].entry_id,
     )
     assert device_entry is not None
     entity_entry = entity_reg.async_get(f"{domain}.{object_id}")
@@ -649,8 +653,9 @@ async def help_test_discovery_device_remove(
         )
         await hass.async_block_till_done()
 
-    device = device_reg.async_get_device(
-        connections={(dr.CONNECTION_NETWORK_MAC, config[CONF_MAC])}
+    device = device_reg.async_get_device_by_connection(
+        (dr.CONNECTION_NETWORK_MAC, config[CONF_MAC]),
+        hass.config_entries.async_entries("tasmota")[0].entry_id,
     )
     assert device is not None
     assert entity_reg.async_get_entity_id(domain, "tasmota", unique_id)
@@ -658,8 +663,9 @@ async def help_test_discovery_device_remove(
     async_fire_mqtt_message(hass, f"{DEFAULT_PREFIX}/{config[CONF_MAC]}/config", "")
     await hass.async_block_till_done()
 
-    device = device_reg.async_get_device(
-        connections={(dr.CONNECTION_NETWORK_MAC, config[CONF_MAC])}
+    device = device_reg.async_get_device_by_connection(
+        (dr.CONNECTION_NETWORK_MAC, config[CONF_MAC]),
+        hass.config_entries.async_entries("tasmota")[0].entry_id,
     )
     assert device is None
     assert not entity_reg.async_get_entity_id(domain, "tasmota", unique_id)

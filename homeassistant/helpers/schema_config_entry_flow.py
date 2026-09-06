@@ -1,13 +1,11 @@
 """Helpers for creating schema based data entry flows."""
 
-from __future__ import annotations
-
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Container, Coroutine, Mapping
 import copy
 from dataclasses import dataclass
 import types
-from typing import Any, cast
+from typing import Any, cast, override
 
 import voluptuous as vol
 
@@ -16,6 +14,7 @@ from homeassistant.config_entries import (
     ConfigFlow,
     ConfigFlowResult,
     OptionsFlow,
+    OptionsFlowWithReload,
 )
 from homeassistant.core import HomeAssistant, callback, split_entity_id
 from homeassistant.data_entry_flow import UnknownHandler
@@ -80,8 +79,8 @@ class SchemaFlowFormStep(SchemaFlowStep):
 
     suggested_values: (
         Callable[[SchemaCommonFlowHandler], Coroutine[Any, Any, dict[str, Any]]]
-        | None
         | UndefinedType
+        | None
     ) = UNDEFINED
     """Optional property to populate suggested values.
 
@@ -115,6 +114,10 @@ class SchemaFlowMenuStep(SchemaFlowStep):
 
     - If a function is specified, the function will be passed the current
     `SchemaCommonFlowHandler`.
+    """
+
+    sort: bool = False
+    """If true, menu options will be alphabetically sorted by the option label.
     """
 
 
@@ -178,25 +181,6 @@ class SchemaCommonFlowHandler:
         """Handle a form step."""
         form_step: SchemaFlowFormStep = cast(SchemaFlowFormStep, self._flow[step_id])
 
-        if (
-            user_input is not None
-            and (data_schema := await self._get_schema(form_step))
-            and data_schema.schema
-            and not self._handler.show_advanced_options
-        ):
-            # Add advanced field default if not set
-            for key in data_schema.schema:
-                if isinstance(key, (vol.Optional, vol.Required)):
-                    if (
-                        key.description
-                        and key.description.get("advanced")
-                        and key.default is not vol.UNDEFINED
-                        and key not in self._options
-                    ):
-                        user_input[str(key.schema)] = cast(
-                            Callable[[], Any], key.default
-                        )()
-
         if user_input is not None and form_step.validate_user_input is not None:
             # Do extra validation of user input
             try:
@@ -207,7 +191,7 @@ class SchemaCommonFlowHandler:
         if user_input is not None:
             # User input was validated successfully, update options
             self._update_and_remove_omitted_optional_keys(
-                self._options, user_input, data_schema
+                self._options, user_input, await self._get_schema(form_step)
             )
 
         if user_input is not None or form_step.schema is None:
@@ -227,12 +211,6 @@ class SchemaCommonFlowHandler:
                 if (
                     isinstance(key, vol.Optional)
                     and key not in user_input
-                    and not (
-                        # don't remove advanced keys, if they are hidden
-                        key.description
-                        and key.description.get("advanced")
-                        and not self._handler.show_advanced_options
-                    )
                     and not (
                         # don't remove read_only keys
                         isinstance(data_schema.schema[key], selector.Selector)
@@ -269,6 +247,7 @@ class SchemaCommonFlowHandler:
             return self._handler.async_show_menu(
                 step_id=next_step_id,
                 menu_options=await self._get_options(menu_step),
+                sort=menu_step.sort,
             )
 
         form_step = cast(SchemaFlowFormStep, self._flow[next_step_id])
@@ -322,6 +301,7 @@ class SchemaCommonFlowHandler:
         return self._handler.async_show_menu(
             step_id=step_id,
             menu_options=await self._get_options(menu_step),
+            sort=menu_step.sort,
         )
 
 
@@ -330,9 +310,11 @@ class SchemaConfigFlowHandler(ConfigFlow, ABC):
 
     config_flow: Mapping[str, SchemaFlowStep]
     options_flow: Mapping[str, SchemaFlowStep] | None = None
+    options_flow_reloads: bool = False
 
     VERSION = 1
 
+    @override
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Initialize a subclass."""
         super().__init_subclass__(**kwargs)
@@ -345,6 +327,13 @@ class SchemaConfigFlowHandler(ConfigFlow, ABC):
             if cls.options_flow is None:
                 raise UnknownHandler
 
+            if cls.options_flow_reloads:
+                return SchemaOptionsFlowHandlerWithReload(
+                    config_entry,
+                    cls.options_flow,
+                    cls.async_options_flow_finished,
+                    cls.async_setup_preview,
+                )
             return SchemaOptionsFlowHandler(
                 config_entry,
                 cls.options_flow,
@@ -364,11 +353,13 @@ class SchemaConfigFlowHandler(ConfigFlow, ABC):
         self._common_handler = SchemaCommonFlowHandler(self, self.config_flow, None)
 
     @staticmethod
+    @override
     async def async_setup_preview(hass: HomeAssistant) -> None:
         """Set up preview."""
 
     @classmethod
     @callback
+    @override
     def async_supports_options_flow(cls, config_entry: ConfigEntry) -> bool:
         """Return options flow support for this handler."""
         return cls.options_flow is not None
@@ -419,6 +410,7 @@ class SchemaConfigFlowHandler(ConfigFlow, ABC):
         """
 
     @callback
+    @override
     def async_create_entry(
         self,
         data: Mapping[str, Any],
@@ -462,7 +454,7 @@ class SchemaOptionsFlowHandler(OptionsFlow):
             )
 
         if async_setup_preview:
-            setattr(self, "async_setup_preview", async_setup_preview)
+            setattr(self, "async_setup_preview", async_setup_preview)  # noqa: B010
 
     @property
     def options(self) -> dict[str, Any]:
@@ -487,6 +479,7 @@ class SchemaOptionsFlowHandler(OptionsFlow):
         return _async_step
 
     @callback
+    @override
     def async_create_entry(
         self,
         data: Mapping[str, Any],
@@ -496,6 +489,12 @@ class SchemaOptionsFlowHandler(OptionsFlow):
         if self._async_options_flow_finished:
             self._async_options_flow_finished(self.hass, data)
         return super().async_create_entry(data=data, **kwargs)
+
+
+class SchemaOptionsFlowHandlerWithReload(
+    SchemaOptionsFlowHandler, OptionsFlowWithReload
+):
+    """Handle a schema based options flow which automatically reloads."""
 
 
 @callback

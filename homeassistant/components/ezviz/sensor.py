@@ -1,6 +1,6 @@
 """Support for EZVIZ sensors."""
 
-from __future__ import annotations
+from typing import override
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -37,11 +37,6 @@ SENSOR_TYPES: dict[str, SensorEntityDescription] = {
         translation_key="seconds_last_trigger",
         entity_registry_enabled_default=False,
     ),
-    "last_alarm_pic": SensorEntityDescription(
-        key="last_alarm_pic",
-        translation_key="last_alarm_pic",
-        entity_registry_enabled_default=False,
-    ),
     "supported_channels": SensorEntityDescription(
         key="supported_channels",
         translation_key="supported_channels",
@@ -66,26 +61,6 @@ SENSOR_TYPES: dict[str, SensorEntityDescription] = {
         key="last_alarm_type_name",
         translation_key="last_alarm_type_name",
     ),
-    "Record_Mode": SensorEntityDescription(
-        key="Record_Mode",
-        translation_key="record_mode",
-        entity_registry_enabled_default=False,
-    ),
-    "battery_camera_work_mode": SensorEntityDescription(
-        key="battery_camera_work_mode",
-        translation_key="battery_camera_work_mode",
-        entity_registry_enabled_default=False,
-    ),
-    "powerStatus": SensorEntityDescription(
-        key="powerStatus",
-        translation_key="power_status",
-        entity_registry_enabled_default=False,
-    ),
-    "OnlineStatus": SensorEntityDescription(
-        key="OnlineStatus",
-        translation_key="online_status",
-        entity_registry_enabled_default=False,
-    ),
 }
 
 
@@ -96,26 +71,16 @@ async def async_setup_entry(
 ) -> None:
     """Set up EZVIZ sensors based on a config entry."""
     coordinator = entry.runtime_data
-    entities: list[EzvizSensor] = []
 
-    for camera, sensors in coordinator.data.items():
-        entities.extend(
+    async_add_entities(
+        [
             EzvizSensor(coordinator, camera, sensor)
-            for sensor, value in sensors.items()
-            if sensor in SENSOR_TYPES and value is not None
-        )
-
-        optionals = sensors.get("optionals", {})
-        entities.extend(
-            EzvizSensor(coordinator, camera, optional_key)
-            for optional_key in ("powerStatus", "OnlineStatus")
-            if optional_key in optionals
-        )
-
-        if "mode" in optionals.get("Record_Mode", {}):
-            entities.append(EzvizSensor(coordinator, camera, "mode"))
-
-    async_add_entities(entities)
+            for camera in coordinator.data
+            for sensor, value in coordinator.data[camera].items()
+            if sensor in SENSOR_TYPES
+            if value is not None
+        ]
+    )
 
 
 class EzvizSensor(EzvizEntity, SensorEntity):
@@ -131,6 +96,7 @@ class EzvizSensor(EzvizEntity, SensorEntity):
         self.entity_description = SENSOR_TYPES[sensor]
 
     @property
+    @override
     def native_value(self) -> int | str:
         """Return the state of the sensor."""
         return self.data[self._sensor_name]

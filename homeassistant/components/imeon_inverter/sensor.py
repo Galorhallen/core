@@ -1,6 +1,7 @@
 """Imeon inverter sensor support."""
 
 import logging
+from typing import override
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -417,6 +418,21 @@ SENSOR_DESCRIPTIONS = (
         state_class=SensorStateClass.TOTAL_INCREASING,
         suggested_display_precision=2,
     ),
+    # Forecast
+    SensorEntityDescription(
+        key="forecast_cons_remaining_today",
+        translation_key="forecast_cons_remaining_today",
+        native_unit_of_measurement=UnitOfEnergy.WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        suggested_display_precision=2,
+    ),
+    SensorEntityDescription(
+        key="forecast_prod_remaining_today",
+        translation_key="forecast_prod_remaining_today",
+        native_unit_of_measurement=UnitOfEnergy.WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        suggested_display_precision=2,
+    ),
 )
 
 
@@ -440,6 +456,7 @@ class InverterSensor(InverterEntity, SensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     @property
+    @override
     def native_value(self) -> StateType | None:
         """Return the state of the entity."""
         return self.coordinator.data.get(self.data_key)

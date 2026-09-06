@@ -1,10 +1,8 @@
 """Config flow for Group integration."""
 
-from __future__ import annotations
-
 from collections.abc import Callable, Coroutine, Mapping
 from functools import partial
-from typing import Any, cast
+from typing import Any, cast, override
 
 import voluptuous as vol
 
@@ -35,9 +33,11 @@ from .media_player import MediaPlayerGroup, async_create_preview_media_player
 from .notify import async_create_preview_notify
 from .sensor import async_create_preview_sensor
 from .switch import async_create_preview_switch
+from .valve import async_create_preview_valve
 
 _STATISTIC_MEASURES = [
     "last",
+    "first_available",
     "max",
     "mean",
     "median",
@@ -172,6 +172,7 @@ GROUP_TYPES = [
     "notify",
     "sensor",
     "switch",
+    "valve",
 ]
 
 
@@ -253,6 +254,11 @@ CONFIG_FLOW = {
         preview="group",
         validate_user_input=set_group_type("switch"),
     ),
+    "valve": SchemaFlowFormStep(
+        basic_group_config_schema("valve"),
+        preview="group",
+        validate_user_input=set_group_type("valve"),
+    ),
 }
 
 
@@ -302,6 +308,10 @@ OPTIONS_FLOW = {
         partial(light_switch_options_schema, "switch"),
         preview="group",
     ),
+    "valve": SchemaFlowFormStep(
+        partial(basic_group_options_schema, "valve"),
+        preview="group",
+    ),
 }
 
 PREVIEW_OPTIONS_SCHEMA: dict[str, vol.Schema] = {}
@@ -321,6 +331,7 @@ CREATE_PREVIEW_ENTITY: dict[
     "notify": async_create_preview_notify,
     "sensor": async_create_preview_sensor,
     "switch": async_create_preview_switch,
+    "valve": async_create_preview_valve,
 }
 
 
@@ -329,8 +340,10 @@ class GroupConfigFlowHandler(SchemaConfigFlowHandler, domain=DOMAIN):
 
     config_flow = CONFIG_FLOW
     options_flow = OPTIONS_FLOW
+    options_flow_reloads = True
 
     @callback
+    @override
     def async_config_entry_title(self, options: Mapping[str, Any]) -> str:
         """Return config entry title.
 
@@ -340,6 +353,7 @@ class GroupConfigFlowHandler(SchemaConfigFlowHandler, domain=DOMAIN):
         return cast(str, options["name"]) if "name" in options else ""
 
     @callback
+    @override
     def async_config_flow_finished(self, options: Mapping[str, Any]) -> None:
         """Hide the group members if requested."""
         if options[CONF_HIDE_MEMBERS]:
@@ -349,6 +363,7 @@ class GroupConfigFlowHandler(SchemaConfigFlowHandler, domain=DOMAIN):
 
     @callback
     @staticmethod
+    @override
     def async_options_flow_finished(
         hass: HomeAssistant, options: Mapping[str, Any]
     ) -> None:
@@ -359,6 +374,7 @@ class GroupConfigFlowHandler(SchemaConfigFlowHandler, domain=DOMAIN):
         _async_hide_members(hass, options[CONF_ENTITIES], hidden_by)
 
     @staticmethod
+    @override
     async def async_setup_preview(hass: HomeAssistant) -> None:
         """Set up preview WS API."""
         for group_type, form_step in OPTIONS_FLOW.items():

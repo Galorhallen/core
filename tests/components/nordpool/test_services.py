@@ -1,6 +1,6 @@
 """Test services in Nord Pool."""
 
-import json
+from typing import Any
 from unittest.mock import patch
 
 from pynordpool import (
@@ -25,44 +25,70 @@ from homeassistant.const import ATTR_DATE
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 
-from tests.common import MockConfigEntry, async_load_fixture
+from tests.common import MockConfigEntry, async_load_json_object_fixture
 from tests.test_util.aiohttp import AiohttpClientMocker
 
 TEST_SERVICE_DATA = {
     ATTR_CONFIG_ENTRY: "to_replace",
-    ATTR_DATE: "2024-11-05",
+    ATTR_DATE: "2025-10-01",
     ATTR_AREAS: "SE3",
+    ATTR_CURRENCY: "EUR",
+}
+TEST_SERVICE_DATA2 = {
+    ATTR_CONFIG_ENTRY: "to_replace",
+    ATTR_DATE: "2025-10-01",
+    ATTR_AREAS: "se3",
+    ATTR_CURRENCY: "eur",
+}
+TEST_SERVICE_DATA3 = {
+    ATTR_CONFIG_ENTRY: "to_replace",
+    ATTR_DATE: "2025-10-01",
+    ATTR_AREAS: ["SE3", "SE4"],
     ATTR_CURRENCY: "EUR",
 }
 TEST_SERVICE_DATA_USE_DEFAULTS = {
     ATTR_CONFIG_ENTRY: "to_replace",
-    ATTR_DATE: "2024-11-05",
+    ATTR_DATE: "2025-10-01",
 }
 TEST_SERVICE_INDICES_DATA_60 = {
     ATTR_CONFIG_ENTRY: "to_replace",
-    ATTR_DATE: "2025-07-06",
+    ATTR_DATE: "2025-10-01",
     ATTR_AREAS: "SE3",
     ATTR_CURRENCY: "SEK",
     ATTR_RESOLUTION: 60,
 }
 TEST_SERVICE_INDICES_DATA_15 = {
     ATTR_CONFIG_ENTRY: "to_replace",
-    ATTR_DATE: "2025-07-06",
+    ATTR_DATE: "2025-10-01",
     ATTR_AREAS: "SE3",
     ATTR_CURRENCY: "SEK",
     ATTR_RESOLUTION: 15,
 }
 
 
-@pytest.mark.freeze_time("2024-11-05T18:00:00+00:00")
+@pytest.mark.parametrize(
+    "test_config",
+    [
+        (TEST_SERVICE_DATA),
+        (TEST_SERVICE_DATA2),
+        (TEST_SERVICE_DATA3),
+    ],
+    ids=[
+        "single_area_uppercase_currency_uppercase",
+        "single_area_lowercase_currency_lowercase",
+        "multiple_areas_uppercase_currency_uppercase",
+    ],
+)
+@pytest.mark.freeze_time("2025-10-01T18:00:00+00:00")
 async def test_service_call(
     hass: HomeAssistant,
     load_int: MockConfigEntry,
     snapshot: SnapshotAssertion,
+    test_config: dict[str, Any],
 ) -> None:
     """Test get_prices_for_date service call."""
 
-    service_data = TEST_SERVICE_DATA.copy()
+    service_data = test_config.copy()
     service_data[ATTR_CONFIG_ENTRY] = load_int.entry_id
     response = await hass.services.async_call(
         DOMAIN,
@@ -73,7 +99,15 @@ async def test_service_call(
     )
 
     assert response == snapshot
-    price_value = response["SE3"][0]["price"]
+
+
+@pytest.mark.freeze_time("2025-10-01T18:00:00+00:00")
+async def test_service_call_use_defaults(
+    hass: HomeAssistant,
+    load_int: MockConfigEntry,
+    snapshot: SnapshotAssertion,
+) -> None:
+    """Test get_prices_for_date service call using default values."""
 
     service_data = TEST_SERVICE_DATA_USE_DEFAULTS.copy()
     service_data[ATTR_CONFIG_ENTRY] = load_int.entry_id
@@ -86,7 +120,6 @@ async def test_service_call(
     )
 
     assert "SE3" in response
-    assert response["SE3"][0]["price"] == price_value
 
 
 @pytest.mark.parametrize(
@@ -94,9 +127,10 @@ async def test_service_call(
     [
         (NordPoolAuthenticationError, "authentication_error"),
         (NordPoolError, "connection_error"),
+        (TimeoutError, "connection_error"),
     ],
 )
-@pytest.mark.freeze_time("2024-11-05T18:00:00+00:00")
+@pytest.mark.freeze_time("2025-10-01T18:00:00+00:00")
 async def test_service_call_failures(
     hass: HomeAssistant,
     load_int: MockConfigEntry,
@@ -124,7 +158,7 @@ async def test_service_call_failures(
     assert err.value.translation_key == key
 
 
-@pytest.mark.freeze_time("2024-11-05T18:00:00+00:00")
+@pytest.mark.freeze_time("2025-10-01T18:00:00+00:00")
 async def test_empty_response_returns_empty_list(
     hass: HomeAssistant,
     load_int: MockConfigEntry,
@@ -151,7 +185,7 @@ async def test_empty_response_returns_empty_list(
     assert response == snapshot
 
 
-@pytest.mark.freeze_time("2024-11-05T18:00:00+00:00")
+@pytest.mark.freeze_time("2025-10-01T18:00:00+00:00")
 async def test_service_call_config_entry_bad_state(
     hass: HomeAssistant,
     load_int: MockConfigEntry,
@@ -166,7 +200,7 @@ async def test_service_call_config_entry_bad_state(
             blocking=True,
             return_response=True,
         )
-    assert err.value.translation_key == "entry_not_found"
+    assert err.value.translation_key == "service_config_entry_not_found"
 
     service_data = TEST_SERVICE_DATA.copy()
     service_data[ATTR_CONFIG_ENTRY] = load_int.entry_id
@@ -181,10 +215,10 @@ async def test_service_call_config_entry_bad_state(
             blocking=True,
             return_response=True,
         )
-    assert err.value.translation_key == "entry_not_loaded"
+    assert err.value.translation_key == "service_config_entry_not_loaded"
 
 
-@pytest.mark.freeze_time("2024-11-05T18:00:00+00:00")
+@pytest.mark.freeze_time("2025-10-01T18:00:00+00:00")
 async def test_service_call_for_price_indices(
     hass: HomeAssistant,
     load_int: MockConfigEntry,
@@ -193,14 +227,14 @@ async def test_service_call_for_price_indices(
 ) -> None:
     """Test get_price_indices_for_date service call."""
 
-    fixture_60 = json.loads(await async_load_fixture(hass, "indices_60.json", DOMAIN))
-    fixture_15 = json.loads(await async_load_fixture(hass, "indices_15.json", DOMAIN))
+    fixture_60 = await async_load_json_object_fixture(hass, "indices_60.json", DOMAIN)
+    fixture_15 = await async_load_json_object_fixture(hass, "indices_15.json", DOMAIN)
 
     aioclient_mock.request(
         "GET",
         url=API + "/DayAheadPriceIndices",
         params={
-            "date": "2025-07-06",
+            "date": "2025-10-01",
             "market": "DayAhead",
             "indexNames": "SE3",
             "currency": "SEK",
@@ -213,7 +247,7 @@ async def test_service_call_for_price_indices(
         "GET",
         url=API + "/DayAheadPriceIndices",
         params={
-            "date": "2025-07-06",
+            "date": "2025-10-01",
             "market": "DayAhead",
             "indexNames": "SE3",
             "currency": "SEK",

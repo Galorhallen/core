@@ -1,9 +1,7 @@
 """Config flow for Tautulli."""
 
-from __future__ import annotations
-
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, override
 
 from pytautulli import PyTautulli, PyTautulliException, exceptions
 import voluptuous as vol
@@ -20,6 +18,7 @@ class TautulliConfigFlow(ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
+    @override
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -47,6 +46,10 @@ class TautulliConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="user",
             data_schema=vol.Schema(data_schema),
             errors=errors or {},
+            description_placeholders={
+                "sample_url": "http://192.168.0.10:8181",
+                "sample_port": "8181",
+            },
         )
 
     async def async_step_reauth(
