@@ -12,6 +12,7 @@ import voluptuous as vol
 from homeassistant.components import onboarding
 from homeassistant.config_entries import (
     ConfigEntry,
+    ConfigEntryState,
     ConfigFlow,
     ConfigFlowResult,
     OptionsFlow,
@@ -34,11 +35,9 @@ from .const import (
     CONF_LISTENING_PORT_DEFAULT,
     CONF_MANUAL_DEVICES,
     CONF_MULTICAST_ADDRESS_DEFAULT,
-    CONF_OPTION_MODE,
     CONF_TARGET_PORT_DEFAULT,
     DISCOVERY_TIMEOUT,
     DOMAIN,
-    OptionMode,
 )
 from .coordinator import GoveeLocalApiConfig
 
@@ -49,6 +48,9 @@ async def _async_has_devices(hass: HomeAssistant) -> bool:
     """Return if there are devices that can be discovered."""
 
     source_ips = sorted(await async_get_source_ips(hass))
+    if not source_ips:
+        _LOGGER.debug("No enabled IPv4 source IPs to discover on")
+        return False
 
     # One controller listens on every enabled source IP at once, so a single
     # discovery round covers all network interfaces.
@@ -97,15 +99,14 @@ class GoveeConfigFlowHandler(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Handle a flow initialized by the user."""
 
-        await self.async_set_unique_id(DOMAIN, raise_on_progress=False)
-
-        if self._async_in_progress() or self._async_current_entries():
-            return self.async_abort(reason="already_in_progress")
+        await self.async_set_unique_id(DOMAIN)
 
         if user_input is not None:
             if user_input.get(CONF_AUTO_DISCOVERY):
                 return await self.async_step_discovery_confirm()
-            return self.async_create_entry(title="", data={CONF_AUTO_DISCOVERY: False})
+            return self.async_create_entry(
+                title="", data={}, options={CONF_AUTO_DISCOVERY: False}
+            )
 
         return self.async_show_form(
             step_id="user",
@@ -126,7 +127,9 @@ class GoveeConfigFlowHandler(ConfigFlow, domain=DOMAIN):
         if user_input is not None or not onboarding.async_is_onboarded(self.hass):
             if not await _async_has_devices(self.hass):
                 return self.async_abort(reason="no_devices_found")
-            return self.async_create_entry(title="", data={CONF_AUTO_DISCOVERY: True})
+            return self.async_create_entry(
+                title="", data={}, options={CONF_AUTO_DISCOVERY: True}
+            )
 
         self._set_confirm_only()
         return self.async_show_form(step_id="discovery_confirm", last_step=True)
@@ -138,25 +141,19 @@ class GoveeConfigFlowHandler(ConfigFlow, domain=DOMAIN):
         config_entry: ConfigEntry,
     ) -> GoveeOptionsFlowHandler:
         """Get the options flow."""
-        return GoveeOptionsFlowHandler(config_entry)
+        return GoveeOptionsFlowHandler()
 
 
 class GoveeOptionsFlowHandler(OptionsFlow):
     """Handle a option flow for Govee light local."""
 
-    def __init__(self, config_entry: ConfigEntry) -> None:
-        """Initialize the options flow."""
-        super().__init__()
-        self._config_entry = config_entry
+    def _updated_options(self, **changes: Any) -> dict[str, Any]:
+        """Return the entry options with the given keys replaced.
 
-        self._options = {
-            CONF_MANUAL_DEVICES: set(config_entry.options.get(CONF_MANUAL_DEVICES, [])),
-            CONF_AUTO_DISCOVERY: config_entry.options.get(
-                CONF_AUTO_DISCOVERY,
-                config_entry.data.get(CONF_AUTO_DISCOVERY, True),
-            ),
-            CONF_IPS_TO_REMOVE: set(config_entry.options.get(CONF_IPS_TO_REMOVE, [])),
-        }
+        Every step returns the complete resulting options, so the update
+        listener can reconcile from them without being told what changed.
+        """
+        return {**self.config_entry.options, **changes}
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -175,19 +172,17 @@ class GoveeOptionsFlowHandler(OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Configure auto discovery."""
+        config: GoveeLocalApiConfig = GoveeLocalApiConfig.from_config_entry(
+            self.config_entry
+        )
+
         if user_input is not None:
-            self._options[CONF_AUTO_DISCOVERY] = user_input[CONF_AUTO_DISCOVERY]
             return self.async_create_entry(
                 title="",
-                data={
-                    **self._options,
-                    CONF_OPTION_MODE: OptionMode.CONFIGURE_AUTO_DISCOVERY,
-                },
+                data=self._updated_options(
+                    **{CONF_AUTO_DISCOVERY: user_input[CONF_AUTO_DISCOVERY]}
+                ),
             )
-
-        config: GoveeLocalApiConfig = GoveeLocalApiConfig.from_config_entry(
-            self._config_entry
-        )
 
         return self.async_show_form(
             step_id="configure_auto_discovery",
@@ -204,42 +199,59 @@ class GoveeOptionsFlowHandler(OptionsFlow):
     async def async_step_add_device(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Manage the options."""
+        """Add a device by IP address."""
+        errors: dict[str, str] = {}
+        placeholders: dict[str, str] = {}
 
         if user_input is not None:
             user_ip = user_input[CONF_DEVICE_IP]
             try:
                 IPv4Address(user_ip)
             except AddressValueError:
-                return self.async_abort(
-                    reason="invalid_ip", description_placeholders={"ip": user_ip}
+                errors["base"] = "invalid_ip"
+                placeholders["ip"] = user_ip
+            else:
+                config = GoveeLocalApiConfig.from_config_entry(self.config_entry)
+                return self.async_create_entry(
+                    title="",
+                    data=self._updated_options(
+                        **{
+                            CONF_MANUAL_DEVICES: sorted(
+                                config.manual_devices | {user_ip}
+                            )
+                        }
+                    ),
                 )
-
-            self._options.setdefault(CONF_MANUAL_DEVICES, set()).add(user_ip)
-            return self.async_create_entry(
-                title="",
-                data={**self._options, CONF_OPTION_MODE: OptionMode.ADD_DEVICE},
-            )
-
-        option_schema = {
-            vol.Required(CONF_DEVICE_IP): vol.All(cv.string),
-        }
 
         return self.async_show_form(
             step_id="add_device",
-            data_schema=vol.Schema(option_schema),
+            data_schema=vol.Schema({vol.Required(CONF_DEVICE_IP): cv.string}),
+            errors=errors,
+            description_placeholders=placeholders,
             last_step=True,
         )
 
     async def async_step_remove_device(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Remove a device."""
+        """Remove a manually added device."""
+        # The picker is built from the running controller, which is only
+        # available while the entry is loaded.
+        if self.config_entry.state is not ConfigEntryState.LOADED:
+            return self.async_abort(reason="entry_not_loaded")
+
+        config = GoveeLocalApiConfig.from_config_entry(self.config_entry)
+
         if user_input is not None:
-            self._options[CONF_IPS_TO_REMOVE] = user_input[CONF_IPS_TO_REMOVE]
             return self.async_create_entry(
                 title="",
-                data={**self._options, CONF_OPTION_MODE: OptionMode.REMOVE_DEVICE},
+                data=self._updated_options(
+                    **{
+                        CONF_MANUAL_DEVICES: sorted(
+                            config.manual_devices - set(user_input[CONF_IPS_TO_REMOVE])
+                        )
+                    }
+                ),
             )
 
         coordinator = self.config_entry.runtime_data

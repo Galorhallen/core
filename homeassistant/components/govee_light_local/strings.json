@@ -1,53 +1,18 @@
 {
   "config": {
+    "abort": {
+      "no_devices_found": "[%key:common::config_flow::abort::no_devices_found%]"
+    },
     "step": {
-      "user": {
-        "description": "Please make a choice",
-        "data": {
-          "auto_discovery": "Auto-discovery enabled"
-        }
-      },
       "discovery_confirm": {
         "description": "[%key:common::config_flow::description::confirm_setup%]"
+      },
+      "user": {
+        "data": {
+          "auto_discovery": "Auto-discovery enabled"
+        },
+        "description": "Automatically discover Govee lights on your network, or turn discovery off and add each light yourself by IP address."
       }
-    },
-    "abort": {
-      "already_in_progress": "[%key:common::config_flow::abort::already_in_progress%]",
-      "no_devices_found": "[%key:common::config_flow::abort::no_devices_found%]"
-    }
-  },
-  "options": {
-    "step": {
-      "init": {
-        "description": "Please make a choice",
-        "menu_options": {
-          "configure_auto_discovery": "[%key:component::govee_light_local::options::step::configure_auto_discovery::description%]",
-          "add_device": "[%key:component::govee_light_local::options::step::add_device::description%]",
-          "remove_device": "Remove a manually added device"
-        }
-      },
-      "add_device": {
-        "description": "Enter the device's IP address",
-        "data": {
-          "device_ip": "[%key:common::config_flow::data::ip%]"
-        }
-      },
-      "remove_device": {
-        "description": "Select one or more IP addresses to remove",
-        "data": {
-          "ips_to_remove": "IPs to remove"
-        }
-      },
-      "configure_auto_discovery": {
-        "description": "Enable or disable automatic discovery",
-        "data": {
-          "auto_discovery": "[%key:component::govee_light_local::config::step::user::data::auto_discovery%]"
-        }
-      }
-    },
-    "abort": {
-      "no_devices": "No manually added devices were found",
-      "invalid_ip": "Invalid IP address: {ip}"
     }
   },
   "entity": {
@@ -75,11 +40,56 @@
     }
   },
   "exceptions": {
+    "cannot_start": {
+      "message": "Could not start listening for Govee lights: {error}"
+    },
+    "device_still_online": {
+      "message": "{name} is still responding on your network, so it would be discovered again immediately. Turn the light off or disconnect it from your network, wait a minute, then try again. To stop tracking a manually added light, use Configure > Remove a device instead."
+    },
     "no_devices_found": {
       "message": "[%key:common::config_flow::abort::no_devices_found%]"
     },
+    "no_source_ips": {
+      "message": "No IPv4 network interfaces are enabled for Home Assistant to listen on. Enable at least one in Settings > System > Network."
+    },
     "port_in_use": {
       "message": "Port {port} is already in use"
+    }
+  },
+  "options": {
+    "abort": {
+      "entry_not_loaded": "The Govee lights local configuration entry is not loaded. Reload it and try again.",
+      "no_devices": "No manually added devices were found"
+    },
+    "error": {
+      "invalid_ip": "{ip} is not a valid IP address"
+    },
+    "step": {
+      "add_device": {
+        "data": {
+          "device_ip": "[%key:common::config_flow::data::ip%]"
+        },
+        "description": "Enter the device's IP address"
+      },
+      "configure_auto_discovery": {
+        "data": {
+          "auto_discovery": "[%key:component::govee_light_local::config::step::user::data::auto_discovery%]"
+        },
+        "description": "Enable or disable automatic discovery"
+      },
+      "init": {
+        "menu_options": {
+          "add_device": "Add a device",
+          "configure_auto_discovery": "Configure automatic discovery",
+          "remove_device": "Remove a device"
+        }
+      },
+      "remove_device": {
+        "data": {
+          "ips_to_remove": "IP addresses to remove"
+        },
+        "description": "Select one or more IP addresses to remove"
+      }
     }
   }
 }

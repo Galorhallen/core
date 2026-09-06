@@ -113,6 +113,20 @@ def fixture_mock_govee_api() -> Generator[AsyncMock]:
     mock_api.set_discovery_enabled = MagicMock(side_effect=_set_discovery_enabled)
     type(mock_api).discovery = PropertyMock(side_effect=lambda: discovery_enabled)
 
+    # The reconcile listener reads and mutates the queue, so back it with a
+    # real set rather than a bare mock attribute.
+    discovery_queue: set[str] = set()
+
+    def _add_to_queue(ip: str) -> bool:
+        discovery_queue.add(ip)
+        return True
+
+    mock_api.add_device_to_discovery_queue = MagicMock(side_effect=_add_to_queue)
+    mock_api.remove_device_from_discovery_queue = MagicMock(
+        side_effect=discovery_queue.discard
+    )
+    type(mock_api).discovery_queue = PropertyMock(side_effect=lambda: discovery_queue)
+
     type(mock_api).devices = PropertyMock(return_value=[])
 
     with (

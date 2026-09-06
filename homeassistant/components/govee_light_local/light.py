@@ -15,15 +15,13 @@ from homeassistant.components.light import (
     LightEntityFeature,
     filter_supported_color_modes,
 )
-from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import device_registry as dr, entity_registry as er
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
-from .const import DEVICE_TIMEOUT, DOMAIN, MANUFACTURER, SIGNAL_GOVEE_DEVICE_REMOVE
+from .const import DEVICE_TIMEOUT, DOMAIN, MANUFACTURER
 from .coordinator import GoveeLocalApiCoordinator, GoveeLocalConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
@@ -119,26 +117,6 @@ class GoveeLight(CoordinatorEntity[GoveeLocalApiCoordinator], LightEntity):
             model=device.sku,
             serial_number=device.fingerprint,
         )
-
-    async def async_signal_govee_device_removed(self, fingerprint: str) -> None:
-        """Handle device removal."""
-        if self._device.fingerprint == fingerprint:
-            ent_registry = er.async_get(self.hass)
-            if entity_id := ent_registry.async_get_entity_id(
-                Platform.LIGHT, DOMAIN, self._device.fingerprint
-            ):
-                ent_registry.async_remove(entity_id)
-
-            config_entry = self.coordinator.config_entry
-            if (dev_registry := dr.async_get(self.hass)) and config_entry:
-                if device := dev_registry.async_get_device_by_identifier(
-                    (DOMAIN, self._device.fingerprint), config_entry.entry_id
-                ):
-                    # A device now belongs to a single config entry, so
-                    # dropping it from this entry means deleting it outright.
-                    dev_registry.async_remove_device(device.id)
-            self.coordinator.remove_device(self._device)
-            await self.async_remove(force_remove=True)
 
     @property
     @override
@@ -238,17 +216,9 @@ class GoveeLight(CoordinatorEntity[GoveeLocalApiCoordinator], LightEntity):
 
     @override
     async def async_added_to_hass(self) -> None:
-        """Register update and device removal callbacks."""
+        """Register the update callback when the entity is added."""
         await super().async_added_to_hass()
         self._device.set_update_callback(self._update_callback)
-
-        self.async_on_remove(
-            async_dispatcher_connect(
-                self.hass,
-                SIGNAL_GOVEE_DEVICE_REMOVE,
-                self.async_signal_govee_device_removed,
-            )
-        )
 
     @override
     async def async_will_remove_from_hass(self) -> None:

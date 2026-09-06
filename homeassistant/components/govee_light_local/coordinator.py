@@ -9,20 +9,19 @@ from typing import Self, override
 from govee_local_api import GoveeController, GoveeDevice
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
     CONF_AUTO_DISCOVERY,
     CONF_DISCOVERY_INTERVAL_DEFAULT,
-    CONF_IPS_TO_REMOVE,
     CONF_LISTENING_PORT_DEFAULT,
     CONF_MANUAL_DEVICES,
     CONF_MULTICAST_ADDRESS_DEFAULT,
-    CONF_OPTION_MODE,
     CONF_TARGET_PORT_DEFAULT,
+    DOMAIN,
     SCAN_INTERVAL,
-    OptionMode,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -36,28 +35,23 @@ class GoveeLocalApiConfig:
 
     auto_discovery: bool
     manual_devices: set[str]
-    ips_to_remove: set[str]
-    option_mode: OptionMode | None
 
     @classmethod
     def from_config_entry(cls, config_entry: GoveeLocalConfigEntry) -> Self:
         """Return Govee light local configuration from config entry."""
 
-        config = config_entry.data
         options = config_entry.options
 
-        option_mode: str | None = options.get(CONF_OPTION_MODE, None)
-
         return cls(
-            options.get(CONF_AUTO_DISCOVERY, config.get(CONF_AUTO_DISCOVERY, True)),
+            options.get(CONF_AUTO_DISCOVERY, True),
             set(options.get(CONF_MANUAL_DEVICES, [])),
-            set(options.get(CONF_IPS_TO_REMOVE, [])),
-            OptionMode(option_mode) if option_mode else None,
         )
 
 
 class GoveeLocalApiCoordinator(DataUpdateCoordinator[list[GoveeDevice]]):
     """Govee light local coordinator."""
+
+    config_entry: GoveeLocalConfigEntry
 
     def __init__(
         self,
@@ -100,10 +94,10 @@ class GoveeLocalApiCoordinator(DataUpdateCoordinator[list[GoveeDevice]]):
         self._controller.send_update_message()
 
     async def set_discovery_callback(
-        self, callback: Callable[[GoveeDevice, bool], bool]
+        self, discovered_callback: Callable[[GoveeDevice, bool], bool]
     ) -> None:
         """Set discovery callback for automatic Govee light discovery."""
-        self._controller.set_device_discovered_callback(callback)
+        self._controller.set_device_discovered_callback(discovered_callback)
 
     def enable_discovery(self, enable: bool) -> None:
         """Enable or disable automatic Govee light discovery."""
@@ -124,6 +118,31 @@ class GoveeLocalApiCoordinator(DataUpdateCoordinator[list[GoveeDevice]]):
     def get_device_by_ip(self, ip: str) -> GoveeDevice | None:
         """Return a device by IP address."""
         return self._controller.get_device_by_ip(ip)
+
+    @property
+    def manual_device_ips(self) -> set[str]:
+        """Return the IPs the controller tracks as manually added.
+
+        A queued IP moves into ``devices`` with ``is_manual`` set once the
+        device answers, and eviction puts it back in the queue, so the two are
+        disjoint and their union mirrors the configured manual devices.
+        """
+        return {device.ip for device in self.devices if device.is_manual} | set(
+            self.discovery_queue
+        )
+
+    @callback
+    def async_remove_manual_device(self, ip: str) -> None:
+        """Remove a manually added device and its registry entry."""
+        if device := self.get_device_by_ip(ip):
+            device_registry = dr.async_get(self.hass)
+            if entry := device_registry.async_get_device_by_identifier(
+                (DOMAIN, device.fingerprint), self.config_entry.entry_id
+            ):
+                # Removing the device cascades to its entities.
+                device_registry.async_remove_device(entry.id)
+            self.remove_device(device)
+        self.remove_device_from_discovery_queue(ip)
 
     def cleanup(self) -> asyncio.Event:
         """Stop and cleanup the coordinator."""
