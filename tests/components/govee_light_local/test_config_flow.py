@@ -106,7 +106,7 @@ async def test_creating_entry_has_no_devices(
     """Test setting up Govee with no devices."""
 
     set_mocked_devices(mock_govee_api, [])
-    mock_coordinator._controllers = [mock_govee_api]
+    mock_coordinator._controller = mock_govee_api
 
     with patch(
         "homeassistant.components.govee_light_local.config_flow.DISCOVERY_TIMEOUT",
@@ -141,7 +141,7 @@ async def test_creating_entry_with_devices(
 
     set_mocked_devices(mock_govee_api, _get_devices(mock_govee_api))
 
-    # Mock duplicated IPs to ensure that only one GoveeController is started
+    # Duplicated source IPs must still yield a single GoveeController
     with patch(
         "homeassistant.components.network.async_get_enabled_source_ips",
         return_value=[IPv4Address("192.168.1.2"), IPv4Address("192.168.1.2")],

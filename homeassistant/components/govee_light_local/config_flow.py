@@ -45,11 +45,17 @@ from .coordinator import GoveeLocalApiConfig
 _LOGGER = logging.getLogger(__name__)
 
 
-async def _async_discover(hass: HomeAssistant, adapter_ip: str) -> bool:
+async def _async_has_devices(hass: HomeAssistant) -> bool:
+    """Return if there are devices that can be discovered."""
+
+    source_ips = sorted(await async_get_source_ips(hass))
+
+    # One controller listens on every enabled source IP at once, so a single
+    # discovery round covers all network interfaces.
     controller: GoveeController = GoveeController(
         loop=hass.loop,
         logger=_LOGGER,
-        listening_addresses=adapter_ip,
+        listening_addresses=source_ips,
         broadcast_address=CONF_MULTICAST_ADDRESS_DEFAULT,
         broadcast_port=CONF_TARGET_PORT_DEFAULT,
         listening_port=CONF_LISTENING_PORT_DEFAULT,
@@ -59,10 +65,10 @@ async def _async_discover(hass: HomeAssistant, adapter_ip: str) -> bool:
     )
 
     try:
-        _LOGGER.debug("Starting discovery with IP %s", adapter_ip)
+        _LOGGER.debug("Starting discovery with IPs %s", source_ips)
         await controller.start()
     except OSError as ex:
-        _LOGGER.error("Start failed on IP %s, errno: %d", adapter_ip, ex.errno)
+        _LOGGER.error("Start failed on IPs %s, errno: %d", source_ips, ex.errno)
         return False
 
     try:
@@ -70,7 +76,7 @@ async def _async_discover(hass: HomeAssistant, adapter_ip: str) -> bool:
             while not controller.devices:
                 await asyncio.sleep(delay=1)
     except TimeoutError:
-        _LOGGER.debug("No devices found with IP %s", adapter_ip)
+        _LOGGER.debug("No devices found with IPs %s", source_ips)
 
     devices_count = len(controller.devices)
     cleanup_complete: asyncio.Event = controller.cleanup()
@@ -78,15 +84,6 @@ async def _async_discover(hass: HomeAssistant, adapter_ip: str) -> bool:
         await asyncio.wait_for(cleanup_complete.wait(), 1)
 
     return devices_count > 0
-
-
-async def _async_has_devices(hass: HomeAssistant) -> bool:
-    """Return if there are devices that can be discovered."""
-
-    source_ips = await async_get_source_ips(hass)
-    results = await asyncio.gather(*[_async_discover(hass, ip) for ip in source_ips])
-
-    return any(results)
 
 
 class GoveeConfigFlowHandler(ConfigFlow, domain=DOMAIN):

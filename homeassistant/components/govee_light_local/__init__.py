@@ -44,15 +44,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: GoveeLocalConfigEntry) -
         hass=hass, config_entry=entry, source_ips=source_ips
     )
 
-    async def await_cleanup():
-        cleanup_complete_events: [asyncio.Event] = coordinator.cleanup()
+    async def await_cleanup() -> None:
+        cleanup_complete: asyncio.Event = coordinator.cleanup()
         with suppress(TimeoutError):
-            await asyncio.gather(
-                *[
-                    asyncio.wait_for(cleanup_complete_event.wait(), 1)
-                    for cleanup_complete_event in cleanup_complete_events
-                ]
-            )
+            await asyncio.wait_for(cleanup_complete.wait(), 1)
 
     entry.async_on_unload(await_cleanup)
     entry.async_on_unload(entry.add_update_listener(update_options_listener))
