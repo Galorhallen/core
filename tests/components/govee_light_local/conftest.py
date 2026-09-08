@@ -44,6 +44,16 @@ def set_mocked_devices(mock_govee_api: AsyncMock, devices: list[GoveeDevice]) ->
         None,
     )
 
+    # The removal listener drops devices and the reconcile listener then reads
+    # the remaining ones back, so this has to mutate the same lists rather than
+    # only record the call.
+    def _remove_device(device: str | GoveeDevice) -> None:
+        fingerprint = device.fingerprint if isinstance(device, GoveeDevice) else device
+        if removed := devices_dict.pop(fingerprint, None):
+            devices_list.remove(removed)
+
+    mock_govee_api.remove_device = MagicMock(side_effect=_remove_device)
+
 
 def set_mocked_devices_side_effect(
     mock_govee_api: AsyncMock, devices: list[GoveeDevice]

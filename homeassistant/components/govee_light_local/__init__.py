@@ -10,12 +10,12 @@ from govee_local_api.controller import LISTENING_PORT
 
 from homeassistant.components import network
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
+from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
-from homeassistant.util import dt as dt_util
+from homeassistant.helpers.device_registry import EventDeviceRegistryUpdatedData
 
-from .const import DEVICE_TIMEOUT, DISCOVERY_TIMEOUT, DOMAIN
+from .const import CONF_MANUAL_DEVICES, DISCOVERY_TIMEOUT, DOMAIN
 from .coordinator import (
     GoveeLocalApiConfig,
     GoveeLocalApiCoordinator,
@@ -49,8 +49,47 @@ async def async_setup_entry(hass: HomeAssistant, entry: GoveeLocalConfigEntry) -
         with suppress(TimeoutError):
             await asyncio.wait_for(cleanup_complete.wait(), 1)
 
+    @callback
+    def _async_device_removed(event: Event[EventDeviceRegistryUpdatedData]) -> None:
+        """Forget a deleted device and unconfigure it if it was manual."""
+        if event.data["action"] != "remove":
+            return
+        device_info = event.data["device"]
+        if device_info["config_entry_id"] != entry.entry_id:
+            return
+
+        fingerprints = {
+            identifier[1]
+            for identifier in device_info["identifiers"]
+            if identifier[0] == DOMAIN
+        }
+        # The device is still known to the controller at this point, which is
+        # what lets us map the fingerprint back to its IP.
+        removed = [
+            device
+            for device in coordinator.devices
+            if device.fingerprint in fingerprints
+        ]
+        removed_ips = {device.ip for device in removed}
+        # A device left in the controller answers the next scan as an already
+        # known device, so the platform would never recreate its entity.
+        for device in removed:
+            coordinator.remove_device(device)
+
+        config = GoveeLocalApiConfig.from_config_entry(entry)
+        if (remaining := config.manual_devices - removed_ips) == config.manual_devices:
+            return
+
+        hass.config_entries.async_update_entry(
+            entry,
+            options={**entry.options, CONF_MANUAL_DEVICES: sorted(remaining)},
+        )
+
     entry.async_on_unload(await_cleanup)
     entry.async_on_unload(entry.add_update_listener(update_options_listener))
+    entry.async_on_unload(
+        hass.bus.async_listen(dr.EVENT_DEVICE_REGISTRY_UPDATED, _async_device_removed)
+    )
 
     for device in config.manual_devices:
         coordinator.add_device_to_discovery_queue(device)
@@ -128,30 +167,10 @@ async def async_remove_config_entry_device(
     config_entry: GoveeLocalConfigEntry,
     device_entry: dr.AnyDeviceEntry,
 ) -> bool:
-    """Allow removing a device we have stopped hearing from.
+    """Allow removing a device.
 
-    The controller keeps discovered devices for the lifetime of the entry, so
-    membership of its list says nothing about reachability. Reuse the staleness
-    rule the entities use instead.
+    The actual cleanup is done in the device registry event.
     """
-    fingerprints = {
-        identifier[1]
-        for identifier in device_entry.identifiers
-        if identifier[0] == DOMAIN
-    }
-    for device in config_entry.runtime_data.devices:
-        if device.fingerprint not in fingerprints:
-            continue
-        if dt_util.utcnow() - device.lastseen < DEVICE_TIMEOUT:
-            # Returning False would surface a generic "rejected by integration"
-            # message, so explain why and what to do instead.
-            raise HomeAssistantError(
-                translation_domain=DOMAIN,
-                translation_key="device_still_online",
-                translation_placeholders={
-                    "name": device_entry.name_by_user or device_entry.name or device.sku
-                },
-            )
     return True
 
 

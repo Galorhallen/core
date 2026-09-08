@@ -43,9 +43,6 @@
     "cannot_start": {
       "message": "Could not start listening for Govee lights: {error}"
     },
-    "device_still_online": {
-      "message": "{name} is still responding on your network, so it would be discovered again immediately. Turn the light off or disconnect it from your network, wait a minute, then try again. To stop tracking a manually added light, use Configure > Remove a device instead."
-    },
     "no_devices_found": {
       "message": "[%key:common::config_flow::abort::no_devices_found%]"
     },
