@@ -93,6 +93,12 @@ def fixture_mock_govee_api() -> Generator[AsyncMock]:
         yield mock_controller.return_value
 
 
+@pytest.fixture(name="mock_stuck_cleanup")
+def fixture_mock_stuck_cleanup(mock_govee_api: AsyncMock) -> None:
+    """Make cleanup never complete, as if a transport never closed."""
+    mock_govee_api.cleanup = MagicMock(return_value=Event())
+
+
 @pytest.fixture(name="mock_setup_entry")
 def fixture_mock_setup_entry() -> Generator[AsyncMock]:
     """Override async_setup_entry."""
