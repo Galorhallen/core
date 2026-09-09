@@ -40,6 +40,10 @@ def log_bound_addresses(controller: GoveeController) -> None:
         ),
     )
 
+    # The library already warns per failed bind; keep this at debug for the full picture.
+    for address, error in controller.bind_failures:
+        _LOGGER.debug("Not listening on %s: %s", address, error.strerror or error)
+
 
 async def async_cleanup_controller(controller: GoveeController) -> None:
     """Close the controller's sockets and wait for the listening port to be released."""
@@ -87,7 +91,9 @@ class GoveeLocalApiCoordinator(DataUpdateCoordinator[list[GoveeDevice]]):
     async def start(self) -> None:
         """Start the Govee coordinator."""
 
-        await self._controller.start()
+        # Home Assistant enumerates adapters once at startup, so an address can
+        # be stale by the time we bind it. Keep the adapters that do bind.
+        await self._controller.start(require_all=False)
         self._controller.send_update_message()
         log_bound_addresses(self._controller)
 

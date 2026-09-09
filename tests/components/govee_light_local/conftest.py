@@ -52,6 +52,18 @@ NETWORK_ADAPTERS: list[Adapter] = [
 
 EXPECTED_LISTENING_ADDRESSES = ["10.0.0.7/8", "192.168.1.2/24"]
 
+DISABLED_NETWORK_ADAPTERS: list[Adapter] = [
+    {
+        "name": "eth0",
+        "index": 1,
+        "enabled": False,
+        "auto": False,
+        "default": False,
+        "ipv4": [{"address": "192.168.1.2", "network_prefix": 24}],
+        "ipv6": [],
+    },
+]
+
 
 @pytest.fixture(name="mock_network_adapters")
 def fixture_mock_network_adapters() -> Generator[None]:
@@ -79,6 +91,7 @@ def fixture_mock_govee_api() -> Generator[AsyncMock]:
     # parsed network in a separate index-aligned list.
     mock_api.listening_addresses = ["10.0.0.7", "192.168.1.2"]
     mock_api.networks = [IPv4Network("10.0.0.0/8"), IPv4Network("192.168.1.0/24")]
+    mock_api.bind_failures = []
 
     with (
         patch(

@@ -1,7 +1,7 @@
 """The Govee Light local integration."""
 
 import asyncio
-from errno import EADDRINUSE
+from errno import EADDRINUSE, EADDRNOTAVAIL, EMFILE, ENETDOWN, ENETUNREACH, ENOBUFS
 import logging
 
 from govee_local_api.controller import LISTENING_PORT
@@ -9,12 +9,18 @@ from govee_local_api.controller import LISTENING_PORT
 from homeassistant.components import network
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
 
 from .const import DISCOVERY_TIMEOUT, DOMAIN
 from .coordinator import GoveeLocalApiCoordinator, GoveeLocalConfigEntry
 
 PLATFORMS: list[Platform] = [Platform.LIGHT]
+
+# Bind errors that clear up on their own (port freed, adapter back, resources
+# released); anything else needs user intervention and must not retry.
+TRANSIENT_BIND_ERRNOS = frozenset(
+    {EADDRINUSE, EADDRNOTAVAIL, EMFILE, ENETDOWN, ENETUNREACH, ENOBUFS}
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -27,7 +33,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: GoveeLocalConfigEntry) -
 
     if not listening_addresses:
         raise ConfigEntryNotReady(
-            translation_domain=DOMAIN, translation_key="no_devices_found"
+            translation_domain=DOMAIN, translation_key="no_listening_addresses"
         )
 
     coordinator: GoveeLocalApiCoordinator = GoveeLocalApiCoordinator(
@@ -39,14 +45,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: GoveeLocalConfigEntry) -
     try:
         await coordinator.start()
     except OSError as ex:
-        if ex.errno != EADDRINUSE:
-            _LOGGER.error("Start failed, errno: %d", ex.errno)
-            return False
-        _LOGGER.error("Port %s already in use", LISTENING_PORT)
-        raise ConfigEntryNotReady(
+        # No address bound. Adapters are enumerated once at startup, so retry
+        # rather than fail: a late or stale adapter recovers on the next attempt.
+        if ex.errno == EADDRINUSE:
+            raise ConfigEntryNotReady(
+                translation_domain=DOMAIN,
+                translation_key="port_in_use",
+                translation_placeholders={"port": LISTENING_PORT},
+            ) from ex
+        if ex.errno in TRANSIENT_BIND_ERRNOS:
+            raise ConfigEntryNotReady(
+                translation_domain=DOMAIN,
+                translation_key="bind_failed",
+                translation_placeholders={"error": ex.strerror or str(ex)},
+            ) from ex
+        raise ConfigEntryError(
             translation_domain=DOMAIN,
-            translation_key="port_in_use",
-            translation_placeholders={"port": LISTENING_PORT},
+            translation_key="bind_failed",
+            translation_placeholders={"error": ex.strerror or str(ex)},
         ) from ex
 
     await coordinator.async_config_entry_first_refresh()
