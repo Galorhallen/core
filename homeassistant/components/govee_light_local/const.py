@@ -17,6 +17,12 @@ SCAN_INTERVAL = timedelta(seconds=30)
 DEVICE_TIMEOUT = SCAN_INTERVAL * 3
 DISCOVERY_TIMEOUT = 5
 
+# Passed to GoveeController.cleanup(): how long the library waits for connection_lost
+# before force-completing. Our own wait must exceed it, otherwise we walk away while the
+# socket is still bound and the next setup fails with EADDRINUSE.
+CLEANUP_TIMEOUT = 2
+CLEANUP_WAIT_TIMEOUT = 3
+
 CONF_AUTO_DISCOVERY = "auto_discovery"
 CONF_MANUAL_DEVICES = "manual_devices"
 CONF_DEVICE_IP = "device_ip"

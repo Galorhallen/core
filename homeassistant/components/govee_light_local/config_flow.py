@@ -1,7 +1,6 @@
 """Config flow for Govee light local."""
 
 import asyncio
-from contextlib import suppress
 from ipaddress import AddressValueError, IPv4Address
 import logging
 from typing import Any, override
@@ -27,7 +26,7 @@ from homeassistant.helpers.selector import (
     SelectSelectorMode,
 )
 
-from . import async_get_source_ips
+from . import async_get_listening_addresses
 from .const import (
     CONF_AUTO_DISCOVERY,
     CONF_DEVICE_IP,
@@ -39,7 +38,11 @@ from .const import (
     DISCOVERY_TIMEOUT,
     DOMAIN,
 )
-from .coordinator import GoveeLocalApiConfig
+from .coordinator import (
+    GoveeLocalApiConfig,
+    async_cleanup_controller,
+    log_bound_addresses,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -47,17 +50,15 @@ _LOGGER = logging.getLogger(__name__)
 async def _async_has_devices(hass: HomeAssistant) -> bool:
     """Return if there are devices that can be discovered."""
 
-    source_ips = sorted(await async_get_source_ips(hass))
-    if not source_ips:
-        _LOGGER.debug("No enabled IPv4 source IPs to discover on")
+    listening_addresses = await async_get_listening_addresses(hass)
+    if not listening_addresses:
+        _LOGGER.debug("No enabled IPv4 addresses to listen on")
         return False
 
-    # One controller listens on every enabled source IP at once, so a single
-    # discovery round covers all network interfaces.
     controller: GoveeController = GoveeController(
         loop=hass.loop,
         logger=_LOGGER,
-        listening_addresses=source_ips,
+        listening_addresses=listening_addresses,
         broadcast_address=CONF_MULTICAST_ADDRESS_DEFAULT,
         broadcast_port=CONF_TARGET_PORT_DEFAULT,
         listening_port=CONF_LISTENING_PORT_DEFAULT,
@@ -67,23 +68,25 @@ async def _async_has_devices(hass: HomeAssistant) -> bool:
     )
 
     try:
-        _LOGGER.debug("Starting discovery with IPs %s", source_ips)
-        await controller.start()
+        _LOGGER.debug("Starting discovery on %s", listening_addresses)
+        # Probe through whichever adapters bind; only a total failure aborts.
+        await controller.start(require_all=False)
     except OSError as ex:
-        _LOGGER.error("Start failed on IPs %s, errno: %d", source_ips, ex.errno)
+        _LOGGER.error("Start failed, errno: %d", ex.errno)
         return False
+
+    log_bound_addresses(controller)
 
     try:
         async with asyncio.timeout(delay=DISCOVERY_TIMEOUT):
             while not controller.devices:
                 await asyncio.sleep(delay=1)
     except TimeoutError:
-        _LOGGER.debug("No devices found with IPs %s", source_ips)
-
-    devices_count = len(controller.devices)
-    cleanup_complete: asyncio.Event = controller.cleanup()
-    with suppress(TimeoutError):
-        await asyncio.wait_for(cleanup_complete.wait(), 1)
+        _LOGGER.debug("No devices found")
+    finally:
+        # cleanup() clears the device registry, so count before tearing down.
+        devices_count = len(controller.devices)
+        await async_cleanup_controller(controller)
 
     return devices_count > 0
 

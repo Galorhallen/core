@@ -7,6 +7,7 @@ import pytest
 
 from homeassistant import config_entries
 from homeassistant.components.govee_light_local.const import (
+    CLEANUP_TIMEOUT,
     CONF_AUTO_DISCOVERY,
     CONF_MANUAL_DEVICES,
     DOMAIN,
@@ -15,7 +16,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.setup import async_setup_component
 
-from .conftest import DEFAULT_CAPABILITIES, set_mocked_devices
+from .conftest import (
+    DEFAULT_CAPABILITIES,
+    DISABLED_NETWORK_ADAPTERS,
+    set_mocked_devices,
+    setup_light,
+)
 
 from tests.common import MockConfigEntry
 from tests.typing import WebSocketGenerator
@@ -333,21 +339,59 @@ async def test_update_options_add_devices(
     mock_govee_api.add_device_to_discovery_queue.assert_called_once_with(device1.ip)
 
 
-async def test_setup_without_source_ips(
+async def test_setup_without_listening_addresses(
     hass: HomeAssistant, mock_govee_api: AsyncMock
 ) -> None:
-    """Test setup is retried when no IPv4 interface is enabled."""
+    """Test setup is retried when no enabled adapter has an IPv4 address."""
     config_entry = MockConfigEntry(domain=DOMAIN)
     config_entry.add_to_hass(hass)
 
     with patch(
-        "homeassistant.components.network.async_get_enabled_source_ips",
-        return_value=[],
+        "homeassistant.components.network.async_get_adapters",
+        return_value=DISABLED_NETWORK_ADAPTERS,
     ):
         await hass.config_entries.async_setup(config_entry.entry_id)
         await hass.async_block_till_done()
 
     assert config_entry.state is config_entries.ConfigEntryState.SETUP_RETRY
+    assert (
+        config_entry.reason
+        == "No enabled network adapter has an IPv4 address to listen on"
+    )
+    mock_govee_api.start.assert_not_awaited()
+
+
+@pytest.mark.usefixtures("mock_network_adapters")
+async def test_unload_releases_port(
+    hass: HomeAssistant, mock_govee_api: AsyncMock
+) -> None:
+    """Test unloading waits for the controller to release the listening port."""
+
+    entry, _ = await setup_light(hass, mock_govee_api)
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert entry.state is config_entries.ConfigEntryState.NOT_LOADED
+    mock_govee_api.cleanup.assert_called_once_with(timeout=CLEANUP_TIMEOUT)
+
+
+@pytest.mark.usefixtures("mock_network_adapters", "mock_stuck_cleanup")
+async def test_unload_warns_when_port_not_released(
+    hass: HomeAssistant, mock_govee_api: AsyncMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test a controller that never closes its sockets does not wedge the unload."""
+
+    entry, _ = await setup_light(hass, mock_govee_api)
+
+    with patch(
+        "homeassistant.components.govee_light_local.coordinator.CLEANUP_WAIT_TIMEOUT", 0
+    ):
+        assert await hass.config_entries.async_unload(entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert entry.state is config_entries.ConfigEntryState.NOT_LOADED
+    assert "Timed out waiting for port 4002 to be released" in caplog.text
 
 
 @pytest.mark.parametrize(

@@ -1,13 +1,16 @@
 """Test Govee light local config flow."""
 
-from errno import EADDRINUSE
-from ipaddress import IPv4Address
+import asyncio
+from errno import EADDRINUSE, EADDRNOTAVAIL
+from ipaddress import IPv4Network
 from unittest.mock import AsyncMock, patch
 
 from govee_local_api import GoveeDevice
+import pytest
 
 from homeassistant import config_entries
 from homeassistant.components.govee_light_local.const import (
+    CLEANUP_TIMEOUT,
     CONF_AUTO_DISCOVERY,
     CONF_DEVICE_IP,
     CONF_IPS_TO_REMOVE,
@@ -17,7 +20,12 @@ from homeassistant.components.govee_light_local.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
-from .conftest import DEFAULT_CAPABILITIES, set_mocked_devices
+from .conftest import (
+    DEFAULT_CAPABILITIES,
+    DISABLED_NETWORK_ADAPTERS,
+    EXPECTED_LISTENING_ADDRESSES,
+    set_mocked_devices,
+)
 
 from tests.common import MockConfigEntry
 
@@ -130,22 +138,61 @@ async def test_creating_entry_has_no_devices(
         await hass.async_block_till_done()
         mock_govee_api.start.assert_awaited_once()
         mock_setup_entry.assert_not_called()
+        mock_govee_api.cleanup.assert_called_once_with(timeout=CLEANUP_TIMEOUT)
 
 
+async def test_discovery_releases_port_when_cancelled(
+    hass: HomeAssistant, mock_govee_api: AsyncMock
+) -> None:
+    """Test the discovery controller releases the port when the flow is cancelled."""
+
+    set_mocked_devices(mock_govee_api, [])
+    started = asyncio.Event()
+
+    async def _start(**kwargs: bool) -> None:
+        started.set()
+
+    mock_govee_api.start.side_effect = _start
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    assert result["type"] is FlowResultType.FORM
+
+    # Auto Discovery selection
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_AUTO_DISCOVERY: True}
+    )
+    assert result["type"] is FlowResultType.FORM
+
+    task = hass.async_create_task(
+        hass.config_entries.flow.async_configure(result["flow_id"], {})
+    )
+    await started.wait()
+    # Yield once more so the flow parks in the discovery wait before we cancel it.
+    await asyncio.sleep(0)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    mock_govee_api.cleanup.assert_called_once_with(timeout=CLEANUP_TIMEOUT)
+
+
+@pytest.mark.usefixtures("mock_network_adapters")
 async def test_creating_entry_with_devices(
     hass: HomeAssistant,
     mock_setup_entry: AsyncMock,
     mock_govee_api: AsyncMock,
 ) -> None:
-    """Test setting up Govee with devices."""
+    """Test a single controller listens on every enabled adapter address."""
 
     set_mocked_devices(mock_govee_api, _get_devices(mock_govee_api))
 
-    # Duplicated source IPs must still yield a single GoveeController
     with patch(
-        "homeassistant.components.network.async_get_enabled_source_ips",
-        return_value=[IPv4Address("192.168.1.2"), IPv4Address("192.168.1.2")],
-    ):
+        "homeassistant.components.govee_light_local.config_flow.GoveeController",
+        return_value=mock_govee_api,
+    ) as mock_controller:
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
         )
@@ -167,6 +214,11 @@ async def test_creating_entry_with_devices(
 
         await hass.async_block_till_done()
 
+    assert mock_controller.call_count == 1
+    assert (
+        mock_controller.call_args.kwargs["listening_addresses"]
+        == EXPECTED_LISTENING_ADDRESSES
+    )
     mock_govee_api.start.assert_awaited_once()
     mock_setup_entry.assert_awaited_once()
 
@@ -468,13 +520,13 @@ async def test_options_flow_add_device_preserves_existing_devices(
     assert config_entry.options == expected_options
 
 
-async def test_discovery_without_source_ips(
+async def test_discovery_without_listening_addresses(
     hass: HomeAssistant, mock_govee_api: AsyncMock
 ) -> None:
-    """Test discovery aborts when no IPv4 interface is enabled."""
+    """Test discovery aborts when no enabled adapter provides an IPv4 address."""
     with patch(
-        "homeassistant.components.network.async_get_enabled_source_ips",
-        return_value=[],
+        "homeassistant.components.network.async_get_adapters",
+        return_value=DISABLED_NETWORK_ADAPTERS,
     ):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
@@ -508,3 +560,39 @@ async def test_options_flow_remove_device_entry_not_loaded(
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "entry_not_loaded"
+
+
+@pytest.mark.usefixtures("mock_network_adapters")
+async def test_creating_entry_with_partial_bind(
+    hass: HomeAssistant,
+    mock_setup_entry: AsyncMock,
+    mock_govee_api: AsyncMock,
+) -> None:
+    """Test discovery succeeds through the adapters that do bind."""
+
+    mock_govee_api.listening_addresses = ["192.168.1.2"]
+    mock_govee_api.networks = [IPv4Network("192.168.1.0/24")]
+    mock_govee_api.bind_failures = [
+        ("10.0.0.7", OSError(EADDRNOTAVAIL, "Cannot assign requested address"))
+    ]
+    set_mocked_devices(mock_govee_api, _get_devices(mock_govee_api))
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    assert result["type"] is FlowResultType.FORM
+
+    # Auto Discovery selection
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_AUTO_DISCOVERY: True}
+    )
+    assert result["type"] is FlowResultType.FORM
+
+    # Confirmation form
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+
+    await hass.async_block_till_done()
+
+    mock_govee_api.start.assert_awaited_once_with(require_all=False)
+    mock_setup_entry.assert_awaited_once()

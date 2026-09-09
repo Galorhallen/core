@@ -1,9 +1,7 @@
 """The Govee Light local integration."""
 
 import asyncio
-from contextlib import suppress
-from errno import EADDRINUSE
-from ipaddress import IPv4Address
+from errno import EADDRINUSE, EADDRNOTAVAIL, EMFILE, ENETDOWN, ENETUNREACH, ENOBUFS
 import logging
 
 from govee_local_api.controller import LISTENING_PORT
@@ -11,7 +9,7 @@ from govee_local_api.controller import LISTENING_PORT
 from homeassistant.components import network
 from homeassistant.const import Platform
 from homeassistant.core import Event, HomeAssistant, callback
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import EventDeviceRegistryUpdatedData
 
@@ -24,30 +22,31 @@ from .coordinator import (
 
 PLATFORMS: list[Platform] = [Platform.LIGHT]
 
+# Bind errors that clear up on their own (port freed, adapter back, resources
+# released); anything else needs user intervention and must not retry.
+TRANSIENT_BIND_ERRNOS = frozenset(
+    {EADDRINUSE, EADDRNOTAVAIL, EMFILE, ENETDOWN, ENETUNREACH, ENOBUFS}
+)
+
 _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: GoveeLocalConfigEntry) -> bool:
     """Set up Govee light local from a config entry."""
 
-    source_ips = await async_get_source_ips(hass)
-    _LOGGER.debug("Enabled source IPs: %s", source_ips)
+    listening_addresses = await async_get_listening_addresses(hass)
+    _LOGGER.debug("Enabled listening addresses: %s", listening_addresses)
 
-    if not source_ips:
+    if not listening_addresses:
         raise ConfigEntryNotReady(
-            translation_domain=DOMAIN, translation_key="no_source_ips"
+            translation_domain=DOMAIN, translation_key="no_listening_addresses"
         )
 
     config: GoveeLocalApiConfig = GoveeLocalApiConfig.from_config_entry(entry)
 
     coordinator: GoveeLocalApiCoordinator = GoveeLocalApiCoordinator(
-        hass=hass, config_entry=entry, source_ips=source_ips
+        hass=hass, config_entry=entry, listening_addresses=listening_addresses
     )
-
-    async def await_cleanup() -> None:
-        cleanup_complete: asyncio.Event = coordinator.cleanup()
-        with suppress(TimeoutError):
-            await asyncio.wait_for(cleanup_complete.wait(), 1)
 
     @callback
     def _async_device_removed(event: Event[EventDeviceRegistryUpdatedData]) -> None:
@@ -85,7 +84,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: GoveeLocalConfigEntry) -
             options={**entry.options, CONF_MANUAL_DEVICES: sorted(remaining)},
         )
 
-    entry.async_on_unload(await_cleanup)
+    entry.async_on_unload(coordinator.async_cleanup)
     entry.async_on_unload(entry.add_update_listener(update_options_listener))
     entry.async_on_unload(
         hass.bus.async_listen(dr.EVENT_DEVICE_REGISTRY_UPDATED, _async_device_removed)
@@ -97,17 +96,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: GoveeLocalConfigEntry) -
     try:
         await coordinator.start()
     except OSError as ex:
-        if ex.errno != EADDRINUSE:
+        # No address bound. Adapters are enumerated once at startup, so retry
+        # rather than fail: a late or stale adapter recovers on the next attempt.
+        if ex.errno == EADDRINUSE:
             raise ConfigEntryNotReady(
                 translation_domain=DOMAIN,
-                translation_key="cannot_start",
+                translation_key="port_in_use",
+                translation_placeholders={"port": LISTENING_PORT},
+            ) from ex
+        if ex.errno in TRANSIENT_BIND_ERRNOS:
+            raise ConfigEntryNotReady(
+                translation_domain=DOMAIN,
+                translation_key="bind_failed",
                 translation_placeholders={"error": ex.strerror or str(ex)},
             ) from ex
-        _LOGGER.error("Port %s already in use", LISTENING_PORT)
-        raise ConfigEntryNotReady(
+        raise ConfigEntryError(
             translation_domain=DOMAIN,
-            translation_key="port_in_use",
-            translation_placeholders={"port": LISTENING_PORT},
+            translation_key="bind_failed",
+            translation_placeholders={"error": ex.strerror or str(ex)},
         ) from ex
 
     await coordinator.async_config_entry_first_refresh()
@@ -174,11 +180,21 @@ async def async_remove_config_entry_device(
     return True
 
 
-async def async_get_source_ips(
-    hass: HomeAssistant,
-) -> set[str]:
-    """Get the source ips for Govee local."""
-    source_ips = await network.async_get_enabled_source_ips(hass)
-    return {
-        str(source_ip) for source_ip in source_ips if isinstance(source_ip, IPv4Address)
-    }
+async def async_get_listening_addresses(hass: HomeAssistant) -> list[str]:
+    """Get the enabled IPv4 source addresses, with network mask, for Govee local."""
+    adapters = await network.async_get_adapters(hass)
+    for adapter in adapters:
+        _LOGGER.debug(
+            "Adapter %s (%s): %s",
+            adapter["name"],
+            "enabled" if adapter["enabled"] else "disabled",
+            [f"{ipv4['address']}/{ipv4['network_prefix']}" for ipv4 in adapter["ipv4"]],
+        )
+    return sorted(
+        {
+            f"{ipv4['address']}/{ipv4['network_prefix']}"
+            for adapter in adapters
+            if adapter["enabled"]
+            for ipv4 in adapter["ipv4"]
+        }
+    )

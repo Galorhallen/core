@@ -1,6 +1,9 @@
 """Test Govee light local."""
 
-from errno import EADDRINUSE, ENETDOWN
+from errno import EACCES, EADDRINUSE, EADDRNOTAVAIL, EAFNOSUPPORT, ENETDOWN
+from ipaddress import IPv4Network
+import logging
+import os
 from typing import Any
 from unittest.mock import AsyncMock, call, patch
 
@@ -38,6 +41,7 @@ from homeassistant.util import dt as dt_util
 
 from .conftest import (
     DEFAULT_CAPABILITIES,
+    EXPECTED_LISTENING_ADDRESSES,
     SCENE_CAPABILITIES,
     set_mocked_devices,
     setup_light,
@@ -117,13 +121,33 @@ async def test_light_setup_retry(
     assert entry.state is ConfigEntryState.SETUP_RETRY
 
 
-async def test_light_setup_retry_eaddrinuse(
-    hass: HomeAssistant, mock_govee_api: AsyncMock
+@pytest.mark.parametrize(
+    ("bind_errno", "expected_error"),
+    [
+        pytest.param(
+            EADDRINUSE, "Port 4002 is already in use", id="address_already_in_use"
+        ),
+        pytest.param(
+            EADDRNOTAVAIL,
+            "Could not listen for Govee devices: Cannot assign requested address",
+            id="address_unavailable",
+        ),
+        pytest.param(
+            ENETDOWN,
+            "Could not listen for Govee devices: Network is down",
+            id="network_down",
+        ),
+    ],
+)
+async def test_light_setup_retry_when_no_address_binds(
+    hass: HomeAssistant,
+    mock_govee_api: AsyncMock,
+    bind_errno: int,
+    expected_error: str,
 ) -> None:
-    """Test retry on address already in use."""
+    """Test setup is retried whenever the controller binds no address at all."""
 
-    mock_govee_api.start.side_effect = OSError()
-    mock_govee_api.start.side_effect.errno = EADDRINUSE
+    mock_govee_api.start.side_effect = OSError(bind_errno, os.strerror(bind_errno))
     set_mocked_devices(
         mock_govee_api,
         [
@@ -142,34 +166,40 @@ async def test_light_setup_retry_eaddrinuse(
 
     await hass.config_entries.async_setup(entry.entry_id)
     assert entry.state is ConfigEntryState.SETUP_RETRY
+    assert entry.reason == expected_error
 
 
-async def test_light_setup_retry_network_down(
-    hass: HomeAssistant, mock_govee_api: AsyncMock
+@pytest.mark.parametrize(
+    ("bind_errno", "expected_error"),
+    [
+        pytest.param(
+            EACCES,
+            "Could not listen for Govee devices: Permission denied",
+            id="permission_denied",
+        ),
+        pytest.param(
+            EAFNOSUPPORT,
+            "Could not listen for Govee devices: Address family not supported by protocol",
+            id="address_family_unsupported",
+        ),
+    ],
+)
+async def test_light_setup_error_when_bind_fails_permanently(
+    hass: HomeAssistant,
+    mock_govee_api: AsyncMock,
+    bind_errno: int,
+    expected_error: str,
 ) -> None:
-    """Test retry when the network is unavailable."""
+    """Test setup fails without retrying when the bind error cannot clear on its own."""
 
-    mock_govee_api.start.side_effect = OSError()
-    mock_govee_api.start.side_effect.errno = ENETDOWN
-    set_mocked_devices(
-        mock_govee_api,
-        [
-            GoveeDevice(
-                controller=mock_govee_api,
-                ip="192.168.1.100",
-                fingerprint="asdawdqwdqwd",
-                sku="H615A",
-                capabilities=DEFAULT_CAPABILITIES,
-            )
-        ],
-    )
+    mock_govee_api.start.side_effect = OSError(bind_errno, os.strerror(bind_errno))
 
     entry = MockConfigEntry(domain=DOMAIN)
     entry.add_to_hass(hass)
 
     await hass.config_entries.async_setup(entry.entry_id)
-    # A transient bind failure should be retried, not treated as permanent.
-    assert entry.state is ConfigEntryState.SETUP_RETRY
+    assert entry.state is ConfigEntryState.SETUP_ERROR
+    assert entry.reason == expected_error
 
 
 async def test_light_on_off(hass: HomeAssistant, mock_govee_api: AsyncMock) -> None:
@@ -786,3 +816,54 @@ async def test_light_fixed_color_mode(
     assert light is not None
     assert light.attributes[ATTR_COLOR_MODE] == ColorMode.ONOFF
     mock_govee_api.turn_on_off.assert_awaited_with(device, True)
+
+
+@pytest.mark.usefixtures("mock_network_adapters")
+async def test_single_controller_for_all_adapters(
+    hass: HomeAssistant, mock_govee_api: AsyncMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test a single controller listens on every enabled adapter address."""
+
+    caplog.set_level(logging.DEBUG, logger="homeassistant.components.govee_light_local")
+
+    with patch(
+        "homeassistant.components.govee_light_local.coordinator.GoveeController",
+        return_value=mock_govee_api,
+    ) as mock_controller:
+        await setup_light(hass, mock_govee_api)
+
+    assert mock_controller.call_count == 1
+    assert (
+        mock_controller.call_args.kwargs["listening_addresses"]
+        == EXPECTED_LISTENING_ADDRESSES
+    )
+
+    assert "Adapter eth0 (enabled): ['192.168.1.2/24', '192.168.1.2/24']" in caplog.text
+    assert "Adapter eth2 (disabled): ['172.16.0.5/16']" in caplog.text
+    assert "Listening on port 4002: 10.0.0.7 (10.0.0.0/8)" in caplog.text
+    assert "192.168.1.2 (192.168.1.0/24)" in caplog.text
+
+
+@pytest.mark.usefixtures("mock_network_adapters")
+async def test_setup_with_partial_bind(
+    hass: HomeAssistant, mock_govee_api: AsyncMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test setup succeeds when only some of the adapter addresses bind."""
+
+    caplog.set_level(logging.DEBUG, logger="homeassistant.components.govee_light_local")
+
+    # The controller drops what it could not bind, keeping both lists aligned.
+    mock_govee_api.listening_addresses = ["192.168.1.2"]
+    mock_govee_api.networks = [IPv4Network("192.168.1.0/24")]
+    mock_govee_api.bind_failures = [
+        ("10.0.0.7", OSError(EADDRNOTAVAIL, "Cannot assign requested address"))
+    ]
+
+    entry, _ = await setup_light(hass, mock_govee_api)
+
+    assert entry.state is ConfigEntryState.LOADED
+    assert hass.states.get("light.H615A") is not None
+
+    mock_govee_api.start.assert_awaited_once_with(require_all=False)
+    assert "Listening on port 4002: 192.168.1.2 (192.168.1.0/24)" in caplog.text
+    assert "Not listening on 10.0.0.7: Cannot assign requested address" in caplog.text

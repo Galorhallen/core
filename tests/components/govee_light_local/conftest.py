@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Generator
+from ipaddress import IPv4Network
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 from govee_local_api import GoveeDevice, GoveeLightCapabilities, GoveeLightFeatures
@@ -14,9 +15,68 @@ from homeassistant.components.govee_light_local.coordinator import (
     GoveeController,
     GoveeLocalApiCoordinator,
 )
+from homeassistant.components.network import Adapter
 from homeassistant.core import HomeAssistant
 
 from tests.common import MockConfigEntry
+
+NETWORK_ADAPTERS: list[Adapter] = [
+    {
+        "name": "eth0",
+        "index": 1,
+        "enabled": True,
+        "auto": True,
+        "default": True,
+        # The same address twice, to check it is only listened on once.
+        "ipv4": [
+            {"address": "192.168.1.2", "network_prefix": 24},
+            {"address": "192.168.1.2", "network_prefix": 24},
+        ],
+        "ipv6": [],
+    },
+    {
+        "name": "eth1",
+        "index": 2,
+        "enabled": True,
+        "auto": False,
+        "default": False,
+        "ipv4": [{"address": "10.0.0.7", "network_prefix": 8}],
+        "ipv6": [],
+    },
+    {
+        "name": "eth2",
+        "index": 3,
+        "enabled": False,
+        "auto": False,
+        "default": False,
+        "ipv4": [{"address": "172.16.0.5", "network_prefix": 16}],
+        "ipv6": [],
+    },
+]
+
+EXPECTED_LISTENING_ADDRESSES = ["10.0.0.7/8", "192.168.1.2/24"]
+
+DISABLED_NETWORK_ADAPTERS: list[Adapter] = [
+    {
+        "name": "eth0",
+        "index": 1,
+        "enabled": False,
+        "auto": False,
+        "default": False,
+        "ipv4": [{"address": "192.168.1.2", "network_prefix": 24}],
+        "ipv6": [],
+    },
+]
+
+
+@pytest.fixture(name="mock_network_adapters")
+def fixture_mock_network_adapters() -> Generator[None]:
+    """Mock a host with two enabled adapters and one disabled adapter."""
+    with patch(
+        "homeassistant.components.network.async_get_adapters",
+        return_value=NETWORK_ADAPTERS,
+    ):
+        yield
 
 
 def set_mocked_devices(mock_govee_api: AsyncMock, devices: list[GoveeDevice]) -> None:
@@ -139,6 +199,12 @@ def fixture_mock_govee_api() -> Generator[AsyncMock]:
 
     type(mock_api).devices = PropertyMock(return_value=[])
 
+    # The library strips the mask off the address it stores, and keeps the
+    # parsed network in a separate index-aligned list.
+    mock_api.listening_addresses = ["10.0.0.7", "192.168.1.2"]
+    mock_api.networks = [IPv4Network("10.0.0.0/8"), IPv4Network("192.168.1.0/24")]
+    mock_api.bind_failures = []
+
     with (
         patch(
             "homeassistant.components.govee_light_local.coordinator.GoveeController",
@@ -150,6 +216,12 @@ def fixture_mock_govee_api() -> Generator[AsyncMock]:
         ),
     ):
         yield mock_controller.return_value
+
+
+@pytest.fixture(name="mock_stuck_cleanup")
+def fixture_mock_stuck_cleanup(mock_govee_api: AsyncMock) -> None:
+    """Make cleanup never complete, as if a transport never closed."""
+    mock_govee_api.cleanup = MagicMock(return_value=asyncio.Event())
 
 
 @pytest.fixture(name="mock_setup_entry")

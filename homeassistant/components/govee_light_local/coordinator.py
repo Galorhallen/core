@@ -14,6 +14,8 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
+    CLEANUP_TIMEOUT,
+    CLEANUP_WAIT_TIMEOUT,
     CONF_AUTO_DISCOVERY,
     CONF_DISCOVERY_INTERVAL_DEFAULT,
     CONF_LISTENING_PORT_DEFAULT,
@@ -48,6 +50,38 @@ class GoveeLocalApiConfig:
         )
 
 
+def log_bound_addresses(controller: GoveeController) -> None:
+    """Log the addresses and networks the controller is bound to."""
+
+    _LOGGER.debug(
+        "Listening on port %d: %s",
+        CONF_LISTENING_PORT_DEFAULT,
+        ", ".join(
+            f"{address} ({network})" if network else f"{address} (no network mask)"
+            for address, network in zip(
+                controller.listening_addresses, controller.networks, strict=True
+            )
+        ),
+    )
+
+    # The library already warns per failed bind; keep this at debug for the full picture.
+    for address, error in controller.bind_failures:
+        _LOGGER.debug("Not listening on %s: %s", address, error.strerror or error)
+
+
+async def async_cleanup_controller(controller: GoveeController) -> None:
+    """Close the controller's sockets and wait for the listening port to be released."""
+
+    cleanup_complete = controller.cleanup(timeout=CLEANUP_TIMEOUT)
+    try:
+        async with asyncio.timeout(CLEANUP_WAIT_TIMEOUT):
+            await cleanup_complete.wait()
+    except TimeoutError:
+        _LOGGER.warning(
+            "Timed out waiting for port %d to be released", CONF_LISTENING_PORT_DEFAULT
+        )
+
+
 class GoveeLocalApiCoordinator(DataUpdateCoordinator[list[GoveeDevice]]):
     """Govee light local coordinator."""
 
@@ -57,7 +91,7 @@ class GoveeLocalApiCoordinator(DataUpdateCoordinator[list[GoveeDevice]]):
         self,
         hass: HomeAssistant,
         config_entry: GoveeLocalConfigEntry,
-        source_ips: set[str],
+        listening_addresses: list[str],
     ) -> None:
         """Initialize my coordinator."""
         super().__init__(
@@ -72,13 +106,13 @@ class GoveeLocalApiCoordinator(DataUpdateCoordinator[list[GoveeDevice]]):
             config_entry
         )
 
-        # A single controller listens on every enabled source IP: it opens one
+        # A single controller listens on every enabled address: it opens one
         # transport per address internally, so there is no need for one
         # controller per network interface.
         self._controller = GoveeController(
             loop=hass.loop,
             logger=_LOGGER,
-            listening_addresses=sorted(source_ips),
+            listening_addresses=listening_addresses,
             broadcast_address=CONF_MULTICAST_ADDRESS_DEFAULT,
             broadcast_port=CONF_TARGET_PORT_DEFAULT,
             listening_port=CONF_LISTENING_PORT_DEFAULT,
@@ -90,14 +124,19 @@ class GoveeLocalApiCoordinator(DataUpdateCoordinator[list[GoveeDevice]]):
 
     async def start(self) -> None:
         """Start the Govee coordinator."""
-        await self._controller.start()
-        self._controller.send_update_message()
 
-    async def set_discovery_callback(
-        self, discovered_callback: Callable[[GoveeDevice, bool], bool]
+        # Home Assistant enumerates adapters once at startup, so an address can
+        # be stale by the time we bind it. Keep the adapters that do bind.
+        await self._controller.start(require_all=False)
+        self._controller.send_update_message()
+        log_bound_addresses(self._controller)
+
+    @callback
+    def set_discovery_callback(
+        self, discovery_callback: Callable[[GoveeDevice, bool], bool]
     ) -> None:
         """Set discovery callback for automatic Govee light discovery."""
-        self._controller.set_device_discovered_callback(discovered_callback)
+        self._controller.set_device_discovered_callback(discovery_callback)
 
     def enable_discovery(self, enable: bool) -> None:
         """Enable or disable automatic Govee light discovery."""
@@ -144,9 +183,10 @@ class GoveeLocalApiCoordinator(DataUpdateCoordinator[list[GoveeDevice]]):
             self.remove_device(device)
         self.remove_device_from_discovery_queue(ip)
 
-    def cleanup(self) -> asyncio.Event:
-        """Stop and cleanup the coordinator."""
-        return self._controller.cleanup()
+    async def async_cleanup(self) -> None:
+        """Stop the controller and wait for its sockets to close."""
+
+        await async_cleanup_controller(self._controller)
 
     async def turn_on(self, device: GoveeDevice) -> None:
         """Turn on the light."""
