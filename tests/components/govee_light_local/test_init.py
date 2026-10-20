@@ -4,6 +4,8 @@ from unittest.mock import AsyncMock, patch
 
 from govee_local_api import GoveeDevice
 import pytest
+from pytest_homeassistant.common import MockConfigEntry
+from pytest_homeassistant.typing import WebSocketGenerator
 
 from homeassistant import config_entries
 from homeassistant.components.govee_light_local.const import (
@@ -22,9 +24,6 @@ from .conftest import (
     set_mocked_devices,
     setup_light,
 )
-
-from tests.common import MockConfigEntry
-from tests.typing import WebSocketGenerator
 
 
 async def test_setup_entry_with_options(
@@ -333,7 +332,6 @@ async def test_update_options_add_devices(
         },
     )
 
-    await config_entry.runtime_data.async_refresh()
     await hass.async_block_till_done()
 
     mock_govee_api.add_device_to_discovery_queue.assert_called_once_with(device1.ip)

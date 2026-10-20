@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 from govee_local_api import GoveeDevice
 import pytest
+from pytest_homeassistant.common import MockConfigEntry
 
 from homeassistant import config_entries
 from homeassistant.components.govee_light_local.const import (
@@ -27,8 +28,6 @@ from .conftest import (
     set_mocked_devices,
 )
 
-from tests.common import MockConfigEntry
-
 
 def _get_devices(
     mock_govee_api: AsyncMock, is_manual: bool = False
@@ -47,42 +46,20 @@ def _get_devices(
     return devices
 
 
-async def test_abort_on_multiple_flow_autodiscovery(hass: HomeAssistant) -> None:
-    """Test user flow is aborted when another discovery has happened."""
+async def test_abort_on_multiple_flows(hass: HomeAssistant) -> None:
+    """Test a second user flow is aborted while the first is still in progress."""
 
     result = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": config_entries.SOURCE_USER},
-        data={CONF_AUTO_DISCOVERY: True},
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_AUTO_DISCOVERY: True}
     )
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "discovery_confirm"
 
     result2 = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": config_entries.SOURCE_USER},
-        data={},
-    )
-
-    assert result2["type"] is FlowResultType.ABORT
-    assert result2["reason"] == "already_in_progress"
-
-
-async def test_abort_on_multiple_flow_manual(hass: HomeAssistant) -> None:
-    """Test user flow is aborted when another discovery has happened."""
-
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": config_entries.SOURCE_USER},
-        data={CONF_AUTO_DISCOVERY: True},
-    )
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "discovery_confirm"
-
-    result2 = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": config_entries.SOURCE_USER},
-        data={CONF_AUTO_DISCOVERY: False},
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
     )
 
     assert result2["type"] is FlowResultType.ABORT
@@ -96,9 +73,7 @@ async def test_integration_already_exists(hass: HomeAssistant) -> None:
     )
 
     result = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": config_entries.SOURCE_USER},
-        data={CONF_AUTO_DISCOVERY: True},
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
     )
 
     assert result["type"] is FlowResultType.ABORT
@@ -207,6 +182,7 @@ async def test_creating_entry_with_devices(
         # Confirmation form
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
         assert result["type"] is FlowResultType.CREATE_ENTRY
+        assert result["result"].unique_id == DOMAIN
         # The options flow owns this setting, so it must be seeded into options
         # rather than data, which an options flow can never write.
         assert result["data"] == {}
@@ -274,6 +250,7 @@ async def test_creating_entry_no_discovery(
         result["flow_id"], {CONF_AUTO_DISCOVERY: False}
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["result"].unique_id == DOMAIN
     assert result["data"] == {}
     assert result["options"] == {CONF_AUTO_DISCOVERY: False}
 
@@ -591,6 +568,7 @@ async def test_creating_entry_with_partial_bind(
     # Confirmation form
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
     assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["result"].unique_id == DOMAIN
 
     await hass.async_block_till_done()
 

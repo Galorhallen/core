@@ -6,7 +6,7 @@ import logging
 from typing import Any, override
 
 from govee_local_api import GoveeController
-import voluptuous as vol
+import probatio
 
 from homeassistant.components import onboarding
 from homeassistant.config_entries import (
@@ -113,9 +113,9 @@ class GoveeConfigFlowHandler(ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema(
+            data_schema=probatio.Schema(
                 {
-                    vol.Required(
+                    probatio.Required(
                         CONF_AUTO_DISCOVERY,
                         default=True,
                     ): BooleanSelector(),
@@ -189,9 +189,9 @@ class GoveeOptionsFlowHandler(OptionsFlow):
 
         return self.async_show_form(
             step_id="configure_auto_discovery",
-            data_schema=vol.Schema(
+            data_schema=probatio.Schema(
                 {
-                    vol.Required(
+                    probatio.Required(
                         CONF_AUTO_DISCOVERY, default=config.auto_discovery
                     ): BooleanSelector(),
                 }
@@ -228,7 +228,7 @@ class GoveeOptionsFlowHandler(OptionsFlow):
 
         return self.async_show_form(
             step_id="add_device",
-            data_schema=vol.Schema({vol.Required(CONF_DEVICE_IP): cv.string}),
+            data_schema=probatio.Schema({probatio.Required(CONF_DEVICE_IP): cv.string}),
             errors=errors,
             description_placeholders=placeholders,
             last_step=True,
@@ -275,7 +275,7 @@ class GoveeOptionsFlowHandler(OptionsFlow):
             return self.async_abort(reason="no_devices")
 
         option_schema = {
-            vol.Required(CONF_IPS_TO_REMOVE): SelectSelector(
+            probatio.Required(CONF_IPS_TO_REMOVE): SelectSelector(
                 SelectSelectorConfig(
                     options=manual_devices,
                     custom_value=False,
@@ -287,6 +287,6 @@ class GoveeOptionsFlowHandler(OptionsFlow):
 
         return self.async_show_form(
             step_id="remove_device",
-            data_schema=vol.Schema(option_schema),
+            data_schema=probatio.Schema(option_schema),
             last_step=True,
         )

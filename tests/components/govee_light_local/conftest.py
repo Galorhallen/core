@@ -9,6 +9,7 @@ from govee_local_api import GoveeDevice, GoveeLightCapabilities, GoveeLightFeatu
 from govee_local_api.device_registry import DeviceRegistry
 from govee_local_api.light_capabilities import COMMON_FEATURES, SCENE_CODES
 import pytest
+from pytest_homeassistant.common import MockConfigEntry
 
 from homeassistant.components.govee_light_local.const import DOMAIN
 from homeassistant.components.govee_light_local.coordinator import (
@@ -17,8 +18,6 @@ from homeassistant.components.govee_light_local.coordinator import (
 )
 from homeassistant.components.network import Adapter
 from homeassistant.core import HomeAssistant
-
-from tests.common import MockConfigEntry
 
 NETWORK_ADAPTERS: list[Adapter] = [
     {
