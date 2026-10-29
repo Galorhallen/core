@@ -105,7 +105,7 @@ class GoveeConfigFlowHandler(ConfigFlow, domain=DOMAIN):
         await self.async_set_unique_id(DOMAIN)
 
         if user_input is not None:
-            if user_input.get(CONF_AUTO_DISCOVERY):
+            if user_input[CONF_AUTO_DISCOVERY]:
                 return await self.async_step_discovery_confirm()
             return self.async_create_entry(
                 title="", data={}, options={CONF_AUTO_DISCOVERY: False}
@@ -134,7 +134,6 @@ class GoveeConfigFlowHandler(ConfigFlow, domain=DOMAIN):
                 title="", data={}, options={CONF_AUTO_DISCOVERY: True}
             )
 
-        self._set_confirm_only()
         return self.async_show_form(step_id="discovery_confirm", last_step=True)
 
     @staticmethod
