@@ -3,6 +3,7 @@
 import asyncio
 from errno import EADDRINUSE, EADDRNOTAVAIL, EMFILE, ENETDOWN, ENETUNREACH, ENOBUFS
 import logging
+from typing import TYPE_CHECKING
 
 from govee_local_api.controller import LISTENING_PORT
 
@@ -49,13 +50,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: GoveeLocalConfigEntry) -
     )
 
     @callback
+    def _async_device_removed_filter(
+        event_data: EventDeviceRegistryUpdatedData,
+    ) -> bool:
+        """Filter for removals of this entry's devices."""
+        return (
+            event_data["action"] == "remove"
+            and event_data["device"]["config_entry_id"] == entry.entry_id
+        )
+
+    @callback
     def _async_device_removed(event: Event[EventDeviceRegistryUpdatedData]) -> None:
         """Forget a deleted device and unconfigure it if it was manual."""
-        if event.data["action"] != "remove":
-            return
+        if TYPE_CHECKING:
+            # The event filter only lets removals through.
+            assert event.data["action"] == "remove"
         device_info = event.data["device"]
-        if device_info["config_entry_id"] != entry.entry_id:
-            return
 
         fingerprints = {
             identifier[1]
@@ -87,7 +97,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: GoveeLocalConfigEntry) -
     entry.async_on_unload(coordinator.async_cleanup)
     entry.async_on_unload(entry.add_update_listener(update_options_listener))
     entry.async_on_unload(
-        hass.bus.async_listen(dr.EVENT_DEVICE_REGISTRY_UPDATED, _async_device_removed)
+        hass.bus.async_listen(
+            dr.EVENT_DEVICE_REGISTRY_UPDATED,
+            _async_device_removed,
+            event_filter=_async_device_removed_filter,
+        )
     )
 
     for device in config.manual_devices:

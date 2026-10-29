@@ -84,12 +84,10 @@ async def test_creating_entry_has_no_devices(
     hass: HomeAssistant,
     mock_setup_entry: AsyncMock,
     mock_govee_api: AsyncMock,
-    mock_coordinator: AsyncMock,
 ) -> None:
     """Test setting up Govee with no devices."""
 
     set_mocked_devices(mock_govee_api, [])
-    mock_coordinator._controller = mock_govee_api
 
     with patch(
         "homeassistant.components.govee_light_local.config_flow.DISCOVERY_TIMEOUT",
@@ -272,7 +270,7 @@ async def test_options_flow_init_menu(hass: HomeAssistant) -> None:
 
     result = await hass.config_entries.options.async_init(config_entry.entry_id)
 
-    assert result["type"] == "menu"
+    assert result["type"] is FlowResultType.MENU
     assert result["step_id"] == "init"
     assert result["menu_options"] == [
         "add_device",
@@ -295,7 +293,7 @@ async def test_options_flow_auto_discovery(hass: HomeAssistant) -> None:
         user_input={"next_step_id": "configure_auto_discovery"},
     )
 
-    assert result["type"] == "form"
+    assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "configure_auto_discovery"
 
     result = await hass.config_entries.options.async_configure(
@@ -303,7 +301,7 @@ async def test_options_flow_auto_discovery(hass: HomeAssistant) -> None:
         user_input={CONF_AUTO_DISCOVERY: False},
     )
 
-    assert result["type"] == "create_entry"
+    assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"] == {CONF_AUTO_DISCOVERY: False}
 
 
@@ -321,7 +319,7 @@ async def test_options_flow_add_device(hass: HomeAssistant) -> None:
         user_input={"next_step_id": "add_device"},
     )
 
-    assert result["type"] == "form"
+    assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "add_device"
 
     result = await hass.config_entries.options.async_configure(
@@ -333,7 +331,7 @@ async def test_options_flow_add_device(hass: HomeAssistant) -> None:
         CONF_AUTO_DISCOVERY: False,
         CONF_MANUAL_DEVICES: ["192.168.1.100"],
     }
-    assert result["type"] == "create_entry"
+    assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"] == expected_options
     assert config_entry.options == expected_options
 
@@ -353,7 +351,7 @@ async def test_options_flow_add_device_wrong_ip(hass: HomeAssistant) -> None:
         user_input={"next_step_id": "add_device"},
     )
 
-    assert result["type"] == "form"
+    assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "add_device"
 
     result = await hass.config_entries.options.async_configure(
@@ -406,7 +404,7 @@ async def test_options_flow_remove_device_with_devices(
         user_input={"next_step_id": "remove_device"},
     )
 
-    assert result["type"] == "form"
+    assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "remove_device"
 
     result = await hass.config_entries.options.async_configure(
@@ -420,12 +418,14 @@ async def test_options_flow_remove_device_with_devices(
         CONF_MANUAL_DEVICES: ["192.168.1.101"],
     }
 
-    assert result["type"] == "create_entry"
+    assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"] == expected_options
     assert config_entry.options == expected_options
 
 
-async def test_options_flow_remove_device_no_devices(hass: HomeAssistant) -> None:
+async def test_options_flow_remove_device_no_devices(
+    hass: HomeAssistant, mock_coordinator: AsyncMock
+) -> None:
     """Test removing devices when none are available."""
     config_entry = MockConfigEntry(
         domain=DOMAIN,
@@ -433,10 +433,8 @@ async def test_options_flow_remove_device_no_devices(hass: HomeAssistant) -> Non
     )
     config_entry.add_to_hass(hass)
 
-    # Mock coordinator with no devices
-    mock_coordinator = AsyncMock()
     mock_coordinator.devices = []
-    mock_coordinator.discovery_queue = []
+    mock_coordinator.discovery_queue = set()
     config_entry.runtime_data = mock_coordinator
     config_entry.mock_state(hass, config_entries.ConfigEntryState.LOADED)
 
@@ -446,12 +444,12 @@ async def test_options_flow_remove_device_no_devices(hass: HomeAssistant) -> Non
         user_input={"next_step_id": "remove_device"},
     )
 
-    assert result["type"] == "abort"
+    assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "no_devices"
 
 
 async def test_options_flow_add_device_preserves_existing_devices(
-    hass: HomeAssistant, mock_coordinator: AsyncMock, mock_govee_api: AsyncMock
+    hass: HomeAssistant, mock_govee_api: AsyncMock
 ) -> None:
     """Test that adding a new manual device preserves existing devices."""
     # Create a config entry with an existing manual device
@@ -492,7 +490,7 @@ async def test_options_flow_add_device_preserves_existing_devices(
         CONF_AUTO_DISCOVERY: False,
         CONF_MANUAL_DEVICES: ["192.168.1.101", "192.168.1.102"],
     }
-    assert result["type"] == "create_entry"
+    assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"] == expected_options
     assert config_entry.options == expected_options
 

@@ -11,6 +11,9 @@
         "data": {
           "auto_discovery": "Auto-discovery enabled"
         },
+        "data_description": {
+          "auto_discovery": "Automatically find Govee lights on your network. Turn off to add each light yourself by its IP address from the integration options."
+        },
         "description": "Automatically discover Govee lights on your network, or turn discovery off and add each light yourself by IP address."
       }
     }
@@ -190,11 +193,17 @@
         "data": {
           "device_ip": "[%key:common::config_flow::data::ip%]"
         },
+        "data_description": {
+          "device_ip": "The IP address of the Govee light to add. Give the light a static IP address or a DHCP reservation so the address does not change."
+        },
         "description": "Enter the device's IP address"
       },
       "configure_auto_discovery": {
         "data": {
           "auto_discovery": "[%key:component::govee_light_local::config::step::user::data::auto_discovery%]"
+        },
+        "data_description": {
+          "auto_discovery": "[%key:component::govee_light_local::config::step::user::data_description::auto_discovery%]"
         },
         "description": "Enable or disable automatic discovery"
       },
@@ -208,6 +217,9 @@
       "remove_device": {
         "data": {
           "ips_to_remove": "IP addresses to remove"
+        },
+        "data_description": {
+          "ips_to_remove": "The manually added Govee lights to remove."
         },
         "description": "Select one or more IP addresses to remove"
       }

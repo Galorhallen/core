@@ -29,7 +29,7 @@ from .conftest import (
 async def test_setup_entry_with_options(
     hass: HomeAssistant, mock_govee_api: AsyncMock
 ) -> None:
-    """Test update options triggers reload."""
+    """Test configured manual devices are queued for discovery at setup."""
 
     config_entry = MockConfigEntry(
         domain=DOMAIN,
@@ -260,7 +260,7 @@ async def test_update_options_remove_device_in_queue(
 async def test_update_options_enable_discovery(
     hass: HomeAssistant, mock_govee_api: AsyncMock
 ) -> None:
-    """Test update options triggers reload."""
+    """Test enabling discovery via options updates the controller without a reload."""
 
     config_entry = MockConfigEntry(
         domain=DOMAIN,

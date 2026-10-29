@@ -114,48 +114,18 @@ def set_mocked_devices(mock_govee_api: AsyncMock, devices: list[GoveeDevice]) ->
     mock_govee_api.remove_device = MagicMock(side_effect=_remove_device)
 
 
-def set_mocked_devices_side_effect(
-    mock_govee_api: AsyncMock, devices: list[GoveeDevice]
-) -> None:
-    """Update a mocked device."""
-    devices_dict = {device.fingerprint: device for device in devices}
-    devices_list = list(devices_dict.values())
-
-    type(mock_govee_api._registry)._discovered_devices = PropertyMock(
-        side_effect=[[], devices_dict]
-    )
-
-    type(mock_govee_api).devices = PropertyMock(side_effect=[[], devices_list])
-
-    mock_govee_api.get_device_by_ip.side_effect = lambda ip: next(
-        (device for device in devices_list if device.ip == ip), None
-    )
-
-    mock_govee_api.get_device_by_sku.side_effect = lambda sku: next(
-        (device for device in devices_list if device.sku == sku), None
-    )
-
-    mock_govee_api.get_device_by_fingerprint.side_effect = lambda fingerprint: next(
-        (device for device in devices_list if device.fingerprint == fingerprint), None
-    )
-
-
 @pytest.fixture(name="mock_coordinator")
-def fixture_mock_coordinator() -> Generator[AsyncMock]:
+def fixture_mock_coordinator() -> AsyncMock:
     """Set up Govee Local API coordinator fixture."""
-    return AsyncMock(spec=GoveeLocalApiCoordinator, wraps=GoveeLocalApiCoordinator)
+    return AsyncMock(spec=GoveeLocalApiCoordinator)
 
 
 @pytest.fixture(name="mock_govee_api")
 def fixture_mock_govee_api() -> Generator[AsyncMock]:
     """Set up Govee Local API fixture."""
 
-    mock_registry = MagicMock(spec=DeviceRegistry, wraps=DeviceRegistry)
+    mock_registry = MagicMock(spec=DeviceRegistry)
     mock_registry._discovered_devices = {}
-
-    event_loop = asyncio.get_event_loop()
-    controller = GoveeController(event_loop)
-    controller._registry = mock_registry
 
     mock_api = AsyncMock(spec=GoveeController)
     mock_api._registry = mock_registry
