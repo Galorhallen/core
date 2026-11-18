@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 import logging
 from typing import Self, override
 
@@ -11,7 +12,7 @@ from govee_local_api import GoveeController, GoveeDevice
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
     CLEANUP_TIMEOUT,
@@ -121,6 +122,7 @@ class GoveeLocalApiCoordinator(DataUpdateCoordinator[list[GoveeDevice]]):
             discovered_callback=None,
             update_enabled=False,
         )
+        self._rebind_lock = asyncio.Lock()
 
     async def start(self) -> None:
         """Start the Govee coordinator."""
@@ -186,6 +188,8 @@ class GoveeLocalApiCoordinator(DataUpdateCoordinator[list[GoveeDevice]]):
     async def async_cleanup(self) -> None:
         """Stop the controller and wait for its sockets to close."""
 
+        # Wait for a running rebind, so cleanup() does not race a bind in flight.
+        await self.async_wait_rebind()
         await async_cleanup_controller(self._controller)
 
     async def turn_on(self, device: GoveeDevice) -> None:
@@ -229,7 +233,27 @@ class GoveeLocalApiCoordinator(DataUpdateCoordinator[list[GoveeDevice]]):
         """Return if discovery is enabled."""
         return self._controller.discovery
 
+    async def async_rebind_failed_addresses(self, _now: datetime) -> None:
+        """Retry the addresses that did not bind."""
+        async with self._rebind_lock:
+            # Losing every endpoint is handled by the update, which reloads the entry.
+            if not self._controller.bind_failures or not self._controller.protocols:
+                return
+            if await self._controller.rebind_failed():
+                log_bound_addresses(self._controller)
+
+    async def async_wait_rebind(self) -> None:
+        """Wait for an in-flight rebind to finish."""
+        async with self._rebind_lock:
+            pass
+
     @override
     async def _async_update_data(self) -> list[GoveeDevice]:
+        # A controller that lost every endpoint stays inoperative until restarted.
+        if not self._controller.protocols:
+            self.hass.config_entries.async_schedule_reload(self.config_entry.entry_id)
+            raise UpdateFailed(
+                translation_domain=DOMAIN, translation_key="no_live_endpoints"
+            )
         self._controller.send_update_message()
         return self.devices

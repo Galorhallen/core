@@ -13,8 +13,9 @@ from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import EventDeviceRegistryUpdatedData
+from homeassistant.helpers.event import async_track_time_interval
 
-from .const import CONF_MANUAL_DEVICES, DISCOVERY_TIMEOUT, DOMAIN
+from .const import CONF_MANUAL_DEVICES, DISCOVERY_TIMEOUT, DOMAIN, REBIND_INTERVAL
 from .coordinator import (
     GoveeLocalApiConfig,
     GoveeLocalApiCoordinator,
@@ -129,6 +130,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: GoveeLocalConfigEntry) -
             translation_key="bind_failed",
             translation_placeholders={"error": ex.strerror or str(ex)},
         ) from ex
+
+    entry.async_on_unload(
+        async_track_time_interval(
+            hass,
+            coordinator.async_rebind_failed_addresses,
+            REBIND_INTERVAL,
+            name="Govee light local rebind",
+        )
+    )
 
     await coordinator.async_config_entry_first_refresh()
 
